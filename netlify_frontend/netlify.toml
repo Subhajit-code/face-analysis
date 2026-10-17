@@ -16,7 +16,7 @@
 
 [[redirects]]
   from = "/api/*"
-  to = "https://YOUR-RENDER-SERVICE-NAME.onrender.com/api/:splat"
+  to = "https://face-analysis-mfkd.onrender.com/api/:splat"
   status = 200
   force = true
 

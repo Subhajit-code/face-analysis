@@ -123,7 +123,8 @@ async function handleLoginStep1(event) {
 
             // Start Camera
             await cameraManager.startCamera(loginVideo);
-            showToast("info", "Credentials Accepted", "Please look directly at the camera for biometric scan.");
+            biometricAudio.speakCredentialsVerified();
+            showToast("info", "Password Verified", "Please align your face inside the target frame for biometric scan.");
         } else {
             biometricAudio.playMismatchTone();
             showToast("error", "Access Denied", data.message || "Invalid credentials.");
@@ -381,6 +382,7 @@ async function handleRegistration(event) {
 
         if (res.ok && data.success) {
             biometricAudio.playCelebrationChime();
+            biometricAudio.speakRegistrationSuccess();
             showToast("success", "Account Created!", data.message);
 
             // Reset registration form

@@ -168,13 +168,23 @@ class BiometricAudioEngine {
         this.playNaturalVoice('instructions');
     }
 
+    speakRegistrationSuccess() {
+        this.playNaturalVoice('registered');
+    }
+
+    speakCredentialsVerified() {
+        this.playNaturalVoice('credentials');
+    }
+
     fallbackSpeech(clipKey) {
         try {
             const phrases = {
                 'mismatch': 'Face does not match, please retry.',
                 'alert': 'Security alert! Impersonation detected. Face does not match registered account.',
                 'verified': 'Face match confirmed! Welcome back.',
-                'instructions': 'Please look directly at the camera for biometric scan.'
+                'instructions': 'Please look directly at the camera for biometric scan.',
+                'registered': 'Registration successful! Your account is now active.',
+                'credentials': 'Password verified! Please align your face inside the target frame for biometric scan.'
             };
             const text = phrases[clipKey] || 'Face does not match, please retry.';
             if ('speechSynthesis' in window) {

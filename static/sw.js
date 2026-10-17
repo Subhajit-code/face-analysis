@@ -20,7 +20,11 @@ const STATIC_ASSETS = [
     '/static/audio_cache/mismatch_male.mp3',
     '/static/audio_cache/verified_male.mp3',
     '/static/audio_cache/alert_male.mp3',
-    '/static/audio_cache/instructions_male.mp3'
+    '/static/audio_cache/instructions_male.mp3',
+    '/static/audio_cache/registered_female.mp3',
+    '/static/audio_cache/registered_male.mp3',
+    '/static/audio_cache/credentials_female.mp3',
+    '/static/audio_cache/credentials_male.mp3'
 ];
 
 // Install event: cache app shell assets

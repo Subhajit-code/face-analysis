@@ -1,6 +1,5 @@
-# Netlify API Proxy to Render Backend
-# Replace YOUR-RENDER-SERVICE-NAME with your actual Render service name
-/api/*  https://YOUR-RENDER-SERVICE-NAME.onrender.com/api/:splat  200!
+# Netlify API Proxy to Live Render Backend
+/api/*  https://face-analysis-mfkd.onrender.com/api/:splat  200!
 
 # SPA Fallback
-/*      /index.html                                               200
+/*      /index.html                                         200
