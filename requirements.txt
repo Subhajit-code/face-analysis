@@ -1,0 +1,11 @@
+flask>=3.0.0
+flask-cors>=4.0.0
+opencv-python-headless>=4.8.0; sys_platform != "win32"
+opencv-python>=4.8.0; sys_platform == "win32"
+numpy>=1.24.0
+cryptography>=41.0.0
+pillow>=10.0.0
+qrcode>=8.0.0
+edge-tts>=6.1.9
+gunicorn>=21.2.0; sys_platform != "win32"
+waitress>=3.0.0

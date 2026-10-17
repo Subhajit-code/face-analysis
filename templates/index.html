@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Biometric Vault - Multi-User Face Recognition Authentication</title>
+    <!-- Modern Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    
+    <!-- Progressive Web App (PWA) Mobile App Support -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="FaceVault">
+    <link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
+    <link rel="icon" type="image/png" href="/static/img/favicon.png">
+    <meta name="theme-color" content="#00f2fe">
+</head>
+<body>
+    <!-- Background Holographic Grid Elements -->
+    <div class="cyber-bg-glow"></div>
+    <div class="cyber-grid"></div>
+
+    <!-- Main Container -->
+    <div class="app-container">
+        
+        <!-- Top System Bar -->
+        <header class="app-header">
+            <div class="brand">
+                <div class="brand-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-5-9c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1zm10 0c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1zm-5 4c2.21 0 4-1.79 4-4H8c0 2.21 1.79 4 4 4z"/>
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    <h1>BIOMETRIC<span>VAULT</span></h1>
+                    <p class="tagline">Tamper-Proof Multi-User Biometric Access Control</p>
+                </div>
+            </div>
+            <div class="system-status">
+                <button type="button" class="header-action-btn mobile-launch-btn" onclick="openMobileModal()" title="Open on Mobile / Install as App">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+                    <span>Mobile App</span>
+                </button>
+                <button type="button" class="header-action-btn pwa-install-btn hidden" id="btnInstallApp" onclick="triggerPWAInstall()" title="Install FaceVault on your device">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <span>Install App</span>
+                </button>
+                <div class="voice-picker">
+                    <span class="voice-icon">🎙️</span>
+                    <select id="voiceSelect" onchange="biometricAudio.setVoiceGender(this.value)" title="Select Human Indian Voice">
+                        <option value="female" selected>Indian Female (Neerja)</option>
+                        <option value="male">Indian Male (Prabhat)</option>
+                    </select>
+                </div>
+                <span class="status-pill status-active"><span class="dot"></span> AES-256</span>
+            </div>
+        </header>
+
+        <!-- Dynamic Content Area -->
+        <main class="main-card">
+            
+            <!-- Navigation Tabs (Only shown when not logged in) -->
+            <div class="tabs-nav" id="authTabs">
+                <button class="tab-btn active" id="tabLoginBtn" onclick="switchTab('login')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
+                    Secure Sign In
+                </button>
+                <button class="tab-btn" id="tabRegisterBtn" onclick="switchTab('register')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+                    Enroll New User
+                </button>
+            </div>
+
+            <!-- View 1: Sign In View -->
+            <section class="auth-view active" id="loginView">
+                
+                <!-- Step 1: Enter ID & Password -->
+                <div class="step-card" id="loginStep1">
+                    <div class="step-badge">FACTOR 1 / 2 &bull; CREDENTIALS</div>
+                    <h2 class="view-title">Enter Account Credentials</h2>
+                    <p class="view-subtitle">Provide your assigned Login ID and password to unlock biometric verification.</p>
+
+                    <form id="loginFormStep1" onsubmit="handleLoginStep1(event)">
+                        <div class="input-group">
+                            <label for="loginIdInput">Login ID</label>
+                            <div class="input-wrapper">
+                                <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                <input type="text" id="loginIdInput" placeholder="e.g. subhash_01" required autocomplete="username">
+                            </div>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="loginPasswordInput">Password</label>
+                            <div class="input-wrapper">
+                                <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                <input type="password" id="loginPasswordInput" placeholder="Enter your secret password" required autocomplete="current-password">
+                            </div>
+                        </div>
+
+                        <button type="submit" class="cyber-btn primary-btn" id="btnStep1Submit">
+                            <span>Proceed to Biometric Scan</span>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Step 2: Live Biometric Camera HUD -->
+                <div class="step-card hidden" id="loginStep2">
+                    <div class="step-badge step-badge-bio">FACTOR 2 / 2 &bull; FACIAL BIOMETRIC SCAN</div>
+                    
+                    <div class="threshold-indicator">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                        <span>Security Rule: <strong>Only &ge; 80% Match Granted Entry</strong> (Below 80% Strictly Denied)</span>
+                    </div>
+
+                    <div class="user-greeting-box">
+                        <span class="greeting-user">Target User: <strong id="greetingTargetName">User</strong> (<span id="greetingTargetId">id</span>)</span>
+                        <button class="back-link" onclick="cancelStep2()">&larr; Change User</button>
+                    </div>
+
+                    <!-- Cyber Biometric Viewfinder -->
+                    <div class="camera-hud-container">
+                        <div class="hud-corner top-left"></div>
+                        <div class="hud-corner top-right"></div>
+                        <div class="hud-corner bottom-left"></div>
+                        <div class="hud-corner bottom-right"></div>
+
+                        <!-- Real-time Status Overlay -->
+                        <div class="hud-telemetry">
+                            <span class="hud-tag"><span class="hud-pulse"></span> SENSOR: ACTIVE</span>
+                            <span class="hud-tag" id="hudFaceStatus">ALIGN FACE</span>
+                            <span class="hud-tag">LIVENESS: ARMED</span>
+                        </div>
+
+                        <!-- Video Stream -->
+                        <video id="loginVideo" autoplay playsinline muted></video>
+                        <canvas id="loginCanvas" class="hidden"></canvas>
+
+                        <!-- Holographic Target Overlay -->
+                        <div class="facial-target-oval" id="targetOval">
+                            <div class="target-crosshair center-h"></div>
+                            <div class="target-crosshair center-v"></div>
+                        </div>
+
+                        <!-- Laser Scan Line -->
+                        <div class="scan-laser hidden" id="scanLaser"></div>
+
+                        <!-- Scan Counter Overlay -->
+                        <div class="scan-countdown hidden" id="scanCountdown">3</div>
+                    </div>
+
+                    <!-- Prompt Instruction -->
+                    <div class="biometric-instruction" id="biometricInstruction">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                        <span>Position your face inside the target frame and look straight ahead.</span>
+                    </div>
+
+                    <!-- Controls -->
+                    <div class="camera-actions">
+                        <button type="button" class="cyber-btn scan-btn" id="btnTriggerScan" onclick="executeBiometricScan()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                            <span>Capture &amp; Verify Face</span>
+                        </button>
+                    </div>
+                </div>
+
+            </section>
+
+            <!-- View 2: User Enrollment / Registration -->
+            <section class="auth-view hidden" id="registerView">
+                <div class="step-card">
+                    <div class="step-badge">USER ENROLLMENT</div>
+                    <h2 class="view-title">Register New Account &amp; Biometrics</h2>
+                    <p class="view-subtitle">Create a unique Login ID, password, and enroll your facial biometric template.</p>
+
+                    <form id="registerForm" onsubmit="handleRegistration(event)">
+                        <div class="form-row">
+                            <div class="input-group">
+                                <label for="regLoginId">Login ID / Username</label>
+                                <div class="input-wrapper">
+                                    <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                    <input type="text" id="regLoginId" placeholder="e.g. john_doe" required autocomplete="username">
+                                </div>
+                            </div>
+                            <div class="input-group">
+                                <label for="regFullName">Full Display Name</label>
+                                <div class="input-wrapper">
+                                    <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+                                    <input type="text" id="regFullName" placeholder="e.g. John Doe" required>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="regPassword">Password (minimum 6 characters)</label>
+                            <div class="input-wrapper">
+                                <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                <input type="password" id="regPassword" placeholder="Create a strong password" required minlength="6" autocomplete="new-password">
+                            </div>
+                        </div>
+
+                        <!-- Face Enrollment Section -->
+                        <div class="enrollment-section">
+                            <label class="section-label">Facial Template Enrollment</label>
+                            <div class="enrollment-flex">
+                                <div class="camera-hud-container enrollment-hud">
+                                    <div class="hud-corner top-left"></div>
+                                    <div class="hud-corner top-right"></div>
+                                    <div class="hud-corner bottom-left"></div>
+                                    <div class="hud-corner bottom-right"></div>
+                                    
+                                    <video id="regVideo" autoplay playsinline muted></video>
+                                    <canvas id="regCanvas" class="hidden"></canvas>
+
+                                    <div class="facial-target-oval"></div>
+                                </div>
+                                <div class="enrollment-preview-box">
+                                    <span class="preview-title">Enrolled Snapshot</span>
+                                    <div class="preview-frame" id="regPreviewFrame">
+                                        <div class="preview-placeholder">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                                            <p>No snapshot taken yet</p>
+                                        </div>
+                                        <img id="regSnapshotImg" class="hidden" alt="Enrolled Preview">
+                                    </div>
+                                    <button type="button" class="cyber-btn secondary-btn" id="btnSnapRegister" onclick="captureRegistrationSnapshot()">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 4h-3.17L14.4 2H9.6L8.17 4H5c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2z"/></svg>
+                                        <span>Capture Face</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button type="submit" class="cyber-btn primary-btn btn-register-submit" id="btnRegisterSubmit">
+                            <span>Register &amp; Save Biometrics</span>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                        </button>
+                    </form>
+                </div>
+            </section>
+
+            <!-- View 3: Authenticated User Dashboard (Shown on Successful Match) -->
+            <section class="auth-view hidden" id="dashboardView">
+                <div class="dashboard-header">
+                    <div class="dash-user-info">
+                        <img id="dashAvatar" class="dash-avatar" src="/static/img/default_avatar.png" alt="User Avatar">
+                        <div class="dash-user-meta">
+                            <span class="verified-badge">
+                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                                BIOMETRICALLY VERIFIED
+                            </span>
+                            <h2 class="dash-name" id="dashName">Subhashish</h2>
+                            <p class="dash-id">Login ID: <strong id="dashLoginId">subhash_01</strong></p>
+                        </div>
+                    </div>
+                    <button class="cyber-btn logout-btn" onclick="handleLogout()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                        <span>Sign Out</span>
+                    </button>
+                </div>
+
+                <!-- Dashboard Statistics Cards -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon">🛡️</div>
+                        <div class="stat-content">
+                            <span class="stat-label">Security Protocol</span>
+                            <span class="stat-val">AES-256 GCM</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">👤</div>
+                        <div class="stat-content">
+                            <span class="stat-label">Biometric Model</span>
+                            <span class="stat-val">SFace 128-D</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">🕒</div>
+                        <div class="stat-content">
+                            <span class="stat-label">Session Status</span>
+                            <span class="stat-val text-success">Active &amp; Secure</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Security Audit Trail -->
+                <div class="audit-section">
+                    <div class="audit-header">
+                        <h3>Security &amp; Authentication History</h3>
+                        <span class="audit-subtitle">Immutable Audit Trail</span>
+                    </div>
+                    <div class="audit-table-wrapper">
+                        <table class="audit-table">
+                            <thead>
+                                <tr>
+                                    <th>Event</th>
+                                    <th>Match Score</th>
+                                    <th>IP Address</th>
+                                    <th>Timestamp (UTC)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="auditTableBody">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+        
+        <!-- Footer -->
+        <footer class="app-footer">
+            <p>Biometric Vault &bull; Zero-Trust Multi-User Authentication Engine</p>
+        </footer>
+    </div>
+
+    <!-- Celebration Good Notification Modal -->
+    <div class="modal-backdrop hidden" id="celebrationModal">
+        <div class="celebration-card">
+            <div class="celebration-particles"></div>
+            <div class="celebration-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+            </div>
+            <h2 class="celebration-title">BIOMETRIC MATCH CONFIRMED!</h2>
+            <p class="celebration-subtitle">Face verification passed with exceptional accuracy.</p>
+            
+            <div class="match-score-badge">
+                <div class="score-dial">
+                    <span class="score-number" id="modalConfidence">96%</span>
+                    <span class="score-caption">Match Confidence</span>
+                </div>
+                <div class="score-detail">
+                    <p>Identity: <strong id="modalUserName">User Name</strong></p>
+                    <p>Status: <span class="badge-approved">Access Granted (&ge; 80% Validated)</span></p>
+                </div>
+            </div>
+
+            <button class="cyber-btn primary-btn celebration-btn" onclick="dismissCelebrationModal()">
+                <span>Proceed to Dashboard</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Mobile Connect & PWA Install Modal -->
+    <div class="modal-backdrop hidden" id="mobileModal">
+        <div class="mobile-modal-card">
+            <button class="modal-close-btn" onclick="closeMobileModal()">&times;</button>
+            <div class="mobile-modal-header">
+                <div class="mobile-icon-badge">📱</div>
+                <h3 class="mobile-modal-title">Mobile App &amp; Web Access</h3>
+                <p class="mobile-modal-sub">Scan the QR code below or open the URL to use FaceVault directly on your phone camera.</p>
+            </div>
+            
+            <div class="mobile-qr-section">
+                <div class="qr-container">
+                    <img id="mobileQrImg" src="/api/mobile/qr" alt="Scan with Phone Camera">
+                </div>
+                <div class="mobile-url-box">
+                    <span class="url-label">Mobile Wi-Fi URL:</span>
+                    <div class="url-input-wrap">
+                        <input type="text" id="mobileUrlDisplay" readonly value="Loading...">
+                        <button type="button" class="copy-url-btn" onclick="copyMobileUrl()">Copy</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mobile-install-steps">
+                <div class="install-step-card">
+                    <div class="step-card-header">
+                        <span class="os-icon">🤖</span>
+                        <h4>Android (Chrome / Edge / Brave)</h4>
+                    </div>
+                    <ol>
+                        <li>Connect your phone to the <strong>same Wi-Fi network</strong> and open the URL or scan the QR code.</li>
+                        <li>Tap the <strong>"Install App"</strong> button (or browser menu <strong>⋮</strong> &rarr; <strong>"Install app"</strong> / <strong>"Add to Home screen"</strong>).</li>
+                        <li>FaceVault installs like a native APK with its own icon and opens in full-screen!</li>
+                    </ol>
+                </div>
+                <div class="install-step-card">
+                    <div class="step-card-header">
+                        <span class="os-icon">🍏</span>
+                        <h4>iPhone / iPad (Safari)</h4>
+                    </div>
+                    <ol>
+                        <li>Connect iPhone to same Wi-Fi, open the URL in <strong>Safari</strong>.</li>
+                        <li>Tap the <strong>Share</strong> button (<span class="share-icon">⎋</span>) at the bottom.</li>
+                        <li>Tap <strong>"Add to Home Screen"</strong> (<span class="share-icon">⊞</span>) &rarr; tap <strong>Add</strong>.</li>
+                        <li>FaceVault appears on your iPhone home screen and launches full screen without Safari bars!</li>
+                    </ol>
+                </div>
+            </div>
+
+            <div class="mobile-https-tip">
+                <span class="tip-icon">💡</span>
+                <span><strong>Phone Camera Tip:</strong> Modern mobile browsers require HTTPS for camera access. Run <code>run_mobile.bat</code> (or <code>python app.py --ssl</code>) and tap <em>"Advanced &rarr; Proceed"</em> when opening on your phone.</span>
+            </div>
+            
+            <div class="mobile-modal-footer">
+                <button type="button" class="cyber-btn secondary-btn" onclick="closeMobileModal()">Close</button>
+                <button type="button" class="cyber-btn primary-btn" id="btnModalInstall" onclick="triggerPWAInstall()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <span>Install App on this Device</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Floating Global Toast Notification -->
+    <div class="toast-notification hidden" id="globalToast">
+        <div class="toast-icon" id="toastIcon">ℹ️</div>
+        <div class="toast-body">
+            <h4 class="toast-title" id="toastTitle">Notification</h4>
+            <p class="toast-message" id="toastMessage">Message content</p>
+        </div>
+        <button class="toast-close" onclick="closeToast()">&times;</button>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/static/js/audio.js"></script>
+    <script src="/static/js/camera.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

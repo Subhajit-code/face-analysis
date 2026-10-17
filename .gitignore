@@ -1,0 +1,29 @@
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Local Runtime Logs & Temp Files
+*.log
+.system_generated/
+
+# Sensitive Local Data & Photos (Keep directories, ignore local evidence)
+data/alerts/*.jpg
+data/cert.pem
+data/key.pem
+
+# OS & IDE Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
