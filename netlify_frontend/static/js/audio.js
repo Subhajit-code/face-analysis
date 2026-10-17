@@ -176,6 +176,61 @@ class BiometricAudioEngine {
         this.playNaturalVoice('credentials');
     }
 
+    /**
+     * Announces camera access restriction when digital fingerprint / geo coordinates fail (< 80%)
+     */
+    speakGeoRestricted() {
+        this.playSecurityLockAlarm();
+        setTimeout(() => {
+            this.playNaturalVoice('geo_restricted');
+        }, 350);
+    }
+
+    /**
+     * Announces camera access unlocked when digital fingerprint matches (>= 80%)
+     */
+    speakGeoVerified() {
+        this.playCelebrationChime();
+        setTimeout(() => {
+            this.playNaturalVoice('geo_verified');
+        }, 300);
+    }
+
+    /**
+     * Announces successful capture of geo-tagged photograph
+     */
+    speakGeoCaptured() {
+        this.playNaturalVoice('geo_captured');
+    }
+
+    /**
+     * High-priority warning alarm for restriction/lockout
+     */
+    playSecurityLockAlarm() {
+        try {
+            this.initContext();
+            const now = this.ctx.currentTime;
+            
+            [0, 0.18].forEach(offset => {
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(880, now + offset);
+                osc.frequency.exponentialRampToValueAtTime(440, now + offset + 0.14);
+
+                gain.gain.setValueAtTime(0.2, now + offset);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.14);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start(now + offset);
+                osc.stop(now + offset + 0.14);
+            });
+        } catch (e) {
+            console.warn("Audio error:", e);
+        }
+    }
+
     fallbackSpeech(clipKey) {
         try {
             const phrases = {
@@ -184,7 +239,10 @@ class BiometricAudioEngine {
                 'verified': 'Face match confirmed! Welcome back.',
                 'instructions': 'Please look directly at the camera for biometric scan.',
                 'registered': 'Registration successful! Your account is now active.',
-                'credentials': 'Password verified! Please align your face inside the target frame for biometric scan.'
+                'credentials': 'Password verified! Please align your face inside the target frame for biometric scan.',
+                'geo_restricted': 'Security alert. Your geographical coordinates and digital fingerprint do not match the registered baseline with the required eighty percent threshold. Camera access has been restricted and this incident has been flagged.',
+                'geo_verified': 'Digital fingerprint and location verified. Camera unlocked for geo-tagged capture.',
+                'geo_captured': 'Geo-tagged picture captured and verified successfully.'
             };
             const text = phrases[clipKey] || 'Face does not match, please retry.';
             if ('speechSynthesis' in window) {
@@ -199,3 +257,4 @@ class BiometricAudioEngine {
 }
 
 const biometricAudio = new BiometricAudioEngine();
+

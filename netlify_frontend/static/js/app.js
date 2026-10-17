@@ -32,10 +32,26 @@ const loginCanvas = document.getElementById("loginCanvas");
 const regVideo = document.getElementById("regVideo");
 const regCanvas = document.getElementById("regCanvas");
 
+const geotagVideo = document.getElementById("geotagVideo");
+const geotagCanvas = document.getElementById("geotagCanvas");
+const geotagCameraBox = document.getElementById("geotagCameraBox");
+const cameraRestrictionShield = document.getElementById("cameraRestrictionShield");
+const geotagCameraActions = document.getElementById("geotagCameraActions");
+const btnOpenGeotagCamera = document.getElementById("btnOpenGeotagCamera");
+const btnCloseGeotagCamera = document.getElementById("btnCloseGeotagCamera");
+const btnSnapGeotagPhoto = document.getElementById("btnSnapGeotagPhoto");
+const simModeSelect = document.getElementById("simModeSelect");
+
 const scanLaser = document.getElementById("scanLaser");
 const scanCountdown = document.getElementById("scanCountdown");
 const btnTriggerScan = document.getElementById("btnTriggerScan");
 const celebrationModal = document.getElementById("celebrationModal");
+
+// State
+let isImposterSimulation = false;
+let currentGeotagMatchScore = 96.0;
+let liveGeoSnapshot = null;
+let currentProfileData = null;
 
 // --- Initialization ---
 document.addEventListener("DOMContentLoaded", () => {
@@ -44,6 +60,10 @@ document.addEventListener("DOMContentLoaded", () => {
         voiceSelect.value = biometricAudio.getVoiceGender();
     }
     checkExistingSession();
+    // Pre-warm digital fingerprint and GPS coordinates
+    digitalFingerprint.collectFullAuditSnapshot().then(snap => {
+        liveGeoSnapshot = snap;
+    }).catch(() => {});
 });
 
 async function checkExistingSession() {
@@ -56,7 +76,7 @@ async function checkExistingSession() {
         });
         const data = await res.json();
         if (data.success) {
-            renderDashboard(data.user, data.audit_logs);
+            renderDashboard(data.user, data.audit_logs, data.geo_captures, data.digital_fingerprint);
         } else {
             localStorage.removeItem("vault_token");
         }
@@ -264,7 +284,7 @@ async function fetchDashboardProfile() {
         });
         const data = await res.json();
         if (data.success) {
-            renderDashboard(data.user, data.audit_logs);
+            renderDashboard(data.user, data.audit_logs, data.geo_captures, data.digital_fingerprint);
         } else {
             handleLogout();
         }
@@ -273,64 +293,146 @@ async function fetchDashboardProfile() {
     }
 }
 
-function renderDashboard(user, auditLogs = []) {
+function renderDashboard(user, auditLogs = [], geoCaptures = [], digitalFingerprintData = null) {
     cameraManager.stopCurrentStream();
+    closeGeotagCamera();
+
     authTabs.classList.add("hidden");
     loginView.classList.add("hidden");
     registerView.classList.add("hidden");
     dashboardView.classList.remove("hidden");
+
+    currentProfileData = { user, auditLogs, geoCaptures, digitalFingerprintData };
 
     document.getElementById("dashName").innerText = user.full_name;
     document.getElementById("dashLoginId").innerText = user.login_id;
     const avatarUrl = getApiUrl(user.avatar);
     document.getElementById("dashAvatar").src = `${avatarUrl}?t=${Date.now()}`;
 
-    // Render Audit Trail
+    // 1. Security Status Banner (Normal vs Flagged)
+    const banner = document.getElementById("dashSecurityBanner");
+    const bannerIcon = document.getElementById("dashBannerIcon");
+    const bannerTitle = document.getElementById("dashBannerTitle");
+    const bannerMsg = document.getElementById("dashBannerMessage");
+    const bannerBadge = document.getElementById("dashBannerBadge");
+
+    if (user.is_flagged) {
+        banner.className = "security-banner banner-flagged";
+        bannerIcon.innerText = "⚠️";
+        bannerTitle.innerText = "SECURITY ALERT: LOCATION & FINGERPRINT FLAGGED";
+        bannerMsg.innerText = user.flag_reason || "Warning: Digital fingerprint or geographical discrepancy recorded. Camera access restricted.";
+        bannerBadge.className = "banner-badge badge-flagged";
+        bannerBadge.innerText = "STATUS: FLAGGED (< 80%)";
+    } else {
+        banner.className = "security-banner banner-safe";
+        bannerIcon.innerText = "🛡️";
+        bannerTitle.innerText = "Biometric & Digital Fingerprint Baseline Active";
+        bannerMsg.innerText = `Enrolled baseline sector: ${user.geo_address || "Registered Primary Sector"}. Hardware camera requires >= 80% match.`;
+        bannerBadge.className = "banner-badge badge-safe";
+        bannerBadge.innerText = "STATUS: SECURE";
+    }
+
+    // 2. Telemetry Inspector Cards
+    const regLat = user.geo_latitude != null ? user.geo_latitude.toFixed(4) : "22.5726";
+    const regLon = user.geo_longitude != null ? user.geo_longitude.toFixed(4) : "88.3639";
+    document.getElementById("dashRegCoords").innerText = `${regLat}°, ${regLon}°`;
+    document.getElementById("dashRegLocality").innerText = user.geo_address || "Sector: Registered Station";
+
+    const towerSig = digitalFingerprintData?.network?.tower_signature || "TOWER-PROBE-4G";
+    const gatewayIp = digitalFingerprintData?.network?.local_gateway || "192.168.1.1";
+    document.getElementById("dashTowerSig").innerText = towerSig;
+    document.getElementById("dashGatewayIp").innerText = `Gateway: ${gatewayIp}`;
+
+    const devHash = user.device_hash || digitalFingerprintData?.device_hash || "FP-HASH-VERIFIED";
+    document.getElementById("dashDeviceHash").innerText = devHash;
+
+    // Probe live coordinates to display deviation
+    digitalFingerprint.getGeoCoordinates().then(currGeo => {
+        const currLat = currGeo.latitude.toFixed(4);
+        const currLon = currGeo.longitude.toFixed(4);
+        document.getElementById("dashCurrCoords").innerText = `${currLat}°, ${currLon}°`;
+
+        if (user.geo_latitude != null && user.geo_longitude != null) {
+            // Client-side quick deviation distance
+            const dLat = (currGeo.latitude - user.geo_latitude) * 111000;
+            const dLon = (currGeo.longitude - user.geo_longitude) * 111000;
+            const dist = Math.sqrt(dLat * dLat + dLon * dLon);
+            const distText = dist > 1000 ? `${(dist / 1000).toFixed(1)} km` : `${Math.round(dist)} m`;
+            document.getElementById("dashGeoDistance").innerText = `Deviation: ${distText}`;
+        }
+    }).catch(() => {});
+
+    // 3. Render Audit Trail
     const tbody = document.getElementById("auditTableBody");
     tbody.innerHTML = "";
 
     if (!auditLogs || auditLogs.length === 0) {
         tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">No recorded security events.</td></tr>`;
-        return;
+    } else {
+        auditLogs.forEach(log => {
+            const tr = document.createElement("tr");
+            let eventBadge = `<span style="color:#10b981; font-weight:600;">✓ ${log.event_type}</span>`;
+            if (log.event_type.includes("MISMATCH") || log.event_type.includes("FAILED") || log.event_type.includes("ATTACK") || log.event_type.includes("RESTRICTED") || log.event_type.includes("FLAGGED")) {
+                eventBadge = `<span style="color:#ef4444; font-weight:600;">✕ ${log.event_type}</span>`;
+            } else if (log.event_type.includes("REGISTERED")) {
+                eventBadge = `<span style="color:#00f2fe; font-weight:600;">✚ ${log.event_type}</span>`;
+            } else if (log.event_type.includes("GEOTAG")) {
+                eventBadge = `<span style="color:#38bdf8; font-weight:600;">📸 ${log.event_type}</span>`;
+            }
+
+            const scoreText = log.distance_score ? `${(log.distance_score * 100).toFixed(1)}%` : "N/A";
+            const timeFormatted = log.timestamp ? log.timestamp.replace("T", " ").substring(0, 19) : "Just now";
+
+            tr.innerHTML = `
+                <td>${eventBadge}</td>
+                <td><code>${scoreText}</code></td>
+                <td>${log.ip_address || "127.0.0.1"}</td>
+                <td>${timeFormatted}</td>
+            `;
+            tbody.appendChild(tr);
+        });
     }
 
-    auditLogs.forEach(log => {
-        const tr = document.createElement("tr");
-        let eventBadge = `<span style="color:#10b981; font-weight:600;">✓ ${log.event_type}</span>`;
-        if (log.event_type.includes("MISMATCH") || log.event_type.includes("FAILED") || log.event_type.includes("ATTACK")) {
-            eventBadge = `<span style="color:#ef4444; font-weight:600;">✕ ${log.event_type}</span>`;
-        } else if (log.event_type.includes("REGISTERED")) {
-            eventBadge = `<span style="color:#00f2fe; font-weight:600;">✚ ${log.event_type}</span>`;
-        }
-
-        const scoreText = log.distance_score ? `${(log.distance_score * 100).toFixed(1)}%` : "N/A";
-        const timeFormatted = log.timestamp ? log.timestamp.replace("T", " ").substring(0, 19) : "Just now";
-
-        tr.innerHTML = `
-            <td>${eventBadge}</td>
-            <td><code>${scoreText}</code></td>
-            <td>${log.ip_address || "127.0.0.1"}</td>
-            <td>${timeFormatted}</td>
-        `;
-        tbody.appendChild(tr);
-    });
+    // 4. Render Geo-Tagged Gallery
+    renderGeotagGallery(geoCaptures);
 }
 
 function handleLogout() {
+    cameraManager.stopCurrentStream();
+    closeGeotagCamera();
     localStorage.removeItem("vault_token");
     sessionUser = null;
+    currentProfileData = null;
     authTabs.classList.remove("hidden");
     dashboardView.classList.add("hidden");
     showToast("info", "Signed Out", "You have securely signed out of the biometric vault.");
     switchTab("login");
 }
 
-// --- Registration & Face Enrollment ---
+// --- Registration & Face Enrollment with Digital Fingerprint Baseline ---
+
 async function initRegistrationCamera() {
     try {
         await cameraManager.startCamera(regVideo);
+        updateRegistrationGeoPreview();
     } catch (err) {
         showToast("error", "Camera Error", err.message);
+    }
+}
+
+async function updateRegistrationGeoPreview() {
+    const desc = document.getElementById("regGeoDesc");
+    if (!desc) return;
+    try {
+        const { geo, fp } = await digitalFingerprint.collectFullAuditSnapshot();
+        liveGeoSnapshot = { geo, fp };
+        const latStr = geo.latitude ? `${geo.latitude.toFixed(4)}° N` : "--";
+        const lonStr = geo.longitude ? `${geo.longitude.toFixed(4)}° E` : "--";
+        const gw = fp.network?.local_gateway || "192.168.1.1";
+        const tower = fp.network?.tower_signature || "TOWER-PRIMARY";
+        desc.innerHTML = `📍 GPS: <strong>${latStr}, ${lonStr}</strong> &bull; Gateway Router: <strong>${gw}</strong> (${tower}) &bull; HW: <code>${fp.device_hash.slice(0, 11)}</code>`;
+    } catch (e) {
+        desc.innerText = "📍 Coordinates & digital router baseline armed for registration.";
     }
 }
 
@@ -364,9 +466,15 @@ async function handleRegistration(event) {
     }
 
     btn.disabled = true;
-    btn.innerHTML = `<span>Encrypting &amp; Enrolling Biometrics...</span>`;
+    btn.innerHTML = `<span>Binding Digital Fingerprint &amp; Face...</span>`;
 
     try {
+        // Collect fresh geo coordinates and digital fingerprint
+        let snapshot = liveGeoSnapshot;
+        if (!snapshot || !snapshot.geo) {
+            snapshot = await digitalFingerprint.collectFullAuditSnapshot();
+        }
+
         const res = await fetch(getApiUrl("/api/register"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -374,7 +482,9 @@ async function handleRegistration(event) {
                 login_id: loginId,
                 full_name: fullName,
                 password: password,
-                image: enrolledSnapshotData
+                image: enrolledSnapshotData,
+                geo_data: snapshot.geo,
+                fingerprint_data: snapshot.fp
             })
         });
 
@@ -410,6 +520,243 @@ async function handleRegistration(event) {
         `;
     }
 }
+
+// ==========================================================================
+// GEO-TAGGED FIELD CAMERA & DIGITAL FINGERPRINT RESTRICTION CONTROLLER
+// ==========================================================================
+
+function handleSimulationModeChange(mode) {
+    isImposterSimulation = (mode === "imposter");
+    if (isImposterSimulation) {
+        showToast("info", "🔴 Imposter Mode Active", "Simulating location shift (5 km away) & disconnected router. Match score will drop to ~36% (< 80%) to test restriction.");
+    } else {
+        showToast("success", "🟢 Normal Mode Active", "Using real GPS sensor & verified device digital fingerprint (>= 80%).");
+    }
+}
+
+async function handleOpenGeotagCamera() {
+    const token = localStorage.getItem("vault_token");
+    if (!token) {
+        showToast("error", "Session Expired", "Please log in again.");
+        switchTab("login");
+        return;
+    }
+
+    btnOpenGeotagCamera.disabled = true;
+    btnOpenGeotagCamera.innerHTML = `<span>Verifying Digital Fingerprint &amp; Location...</span>`;
+
+    try {
+        // Collect current live GPS coordinates and digital hardware/network fingerprint
+        const { geo, fp } = await digitalFingerprint.collectFullAuditSnapshot();
+        liveGeoSnapshot = { geo, fp };
+
+        // Verify with server endpoint
+        const res = await fetch(getApiUrl("/api/geo/verify-camera-access"), {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+            },
+            body: JSON.stringify({
+                geo_data: geo,
+                fingerprint_data: fp,
+                simulate_mismatch: isImposterSimulation
+            })
+        });
+
+        const data = await res.json();
+        currentGeotagMatchScore = data.match_score || 0;
+
+        if (!res.ok || !data.allowed || (data.match_score < 80)) {
+            // ===================================================================
+            // STRICT RESTRICTION: MATCH SCORE < 80%
+            // Restrict camera, show alert shield, and announce via audio!
+            // ===================================================================
+            cameraManager.stopCurrentStream();
+
+            geotagCameraBox.classList.remove("hidden");
+            cameraRestrictionShield.classList.remove("hidden");
+            geotagCameraActions.classList.add("hidden");
+
+            btnOpenGeotagCamera.classList.remove("hidden");
+            btnCloseGeotagCamera.classList.remove("hidden");
+
+            // Populate shield metrics
+            document.getElementById("shieldScoreVal").innerText = `${data.match_score}%`;
+            
+            const reasonsBox = document.getElementById("shieldReasonsList");
+            if (reasonsBox && data.reasons && data.reasons.length > 0) {
+                reasonsBox.innerHTML = data.reasons.map(r => `
+                    <div class="shield-reason-item"><span>${r}</span></div>
+                `).join("");
+            }
+
+            // Flag status in UI
+            const banner = document.getElementById("dashSecurityBanner");
+            if (banner) {
+                banner.className = "security-banner banner-flagged";
+                document.getElementById("dashBannerIcon").innerText = "⚠️";
+                document.getElementById("dashBannerTitle").innerText = "SECURITY ALERT: CAMERA ACCESS RESTRICTED & FLAGGED";
+                document.getElementById("dashBannerMessage").innerText = data.message;
+                const badge = document.getElementById("dashBannerBadge");
+                badge.className = "banner-badge badge-flagged";
+                badge.innerText = `RESTRICTED (${data.match_score}% < 80%)`;
+            }
+
+            // PLAY AUDIO ALERT (Polite, firm warning as requested)
+            biometricAudio.speakGeoRestricted();
+
+            showToast("error", "🔒 CAMERA ACCESS RESTRICTED", `Digital Fingerprint Mismatch (${data.match_score}% < 80%). Flagged in security audit log.`);
+
+            // Refresh audit logs in background to show newly flagged security event
+            fetchDashboardProfile();
+
+        } else {
+            // ===================================================================
+            // ACCESS GRANTED: MATCH SCORE >= 80%
+            // Open camera stream, arm watermark overlay, announce via voice!
+            // ===================================================================
+            cameraRestrictionShield.classList.add("hidden");
+            geotagCameraActions.classList.remove("hidden");
+            geotagCameraBox.classList.remove("hidden");
+
+            btnOpenGeotagCamera.classList.add("hidden");
+            btnCloseGeotagCamera.classList.remove("hidden");
+
+            // Open hardware camera
+            await cameraManager.startCamera(geotagVideo);
+
+            // Update Live HUD telemetry tags
+            document.getElementById("hudMatchScoreTag").innerText = `MATCH: ${data.match_score}% (VERIFIED)`;
+            document.getElementById("wmLiveCoords").innerText = `LAT: ${geo.latitude.toFixed(5)}°, LON: ${geo.longitude.toFixed(5)}° (±${Math.round(geo.accuracy)}m)`;
+            document.getElementById("wmLiveUser").innerText = `USER: ${currentProfileData?.user?.full_name || "Verified"}`;
+            document.getElementById("wmLiveTime").innerText = `TIME: ${new Date().toISOString().substring(11, 19)} UTC`;
+            document.getElementById("wmLiveHash").innerText = `FP: ${fp.device_hash.slice(0, 12)} [VERIFIED]`;
+
+            // Voice announcement
+            biometricAudio.speakGeoVerified();
+
+            showToast("success", "Camera Unlocked", `Digital fingerprint and location verified with ${data.match_score}% confidence (>= 80% required).`);
+        }
+
+    } catch (err) {
+        showToast("error", "Access Verification Error", err.message || "Failed to verify location and fingerprint.");
+    } finally {
+        btnOpenGeotagCamera.disabled = false;
+        btnOpenGeotagCamera.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+            <span>Open Camera for Geo-Tag Capture</span>
+        `;
+    }
+}
+
+function closeGeotagCamera() {
+    cameraManager.stopCurrentStream();
+    if (geotagCameraBox) geotagCameraBox.classList.add("hidden");
+    if (cameraRestrictionShield) cameraRestrictionShield.classList.add("hidden");
+    if (btnOpenGeotagCamera) btnOpenGeotagCamera.classList.remove("hidden");
+    if (btnCloseGeotagCamera) btnCloseGeotagCamera.classList.add("hidden");
+}
+
+async function captureGeotagPhoto() {
+    const token = localStorage.getItem("vault_token");
+    if (!token) return;
+
+    if (currentGeotagMatchScore < 80) {
+        showToast("error", "Restricted", "Cannot click picture: Digital fingerprint confidence is below 80%.");
+        biometricAudio.speakGeoRestricted();
+        return;
+    }
+
+    btnSnapGeotagPhoto.disabled = true;
+    btnSnapGeotagPhoto.innerHTML = `<span>Watermarking &amp; Geo-Tagging...</span>`;
+
+    try {
+        const rawFrame = cameraManager.captureFrame(geotagVideo, geotagCanvas);
+        const snapshot = liveGeoSnapshot || await digitalFingerprint.collectFullAuditSnapshot();
+
+        const res = await fetch(getApiUrl("/api/geo/capture-photo"), {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+            },
+            body: JSON.stringify({
+                image: rawFrame,
+                geo_data: snapshot.geo,
+                fingerprint_data: snapshot.fp,
+                match_score: currentGeotagMatchScore
+            })
+        });
+
+        const data = await res.json();
+
+        if (res.ok && data.success) {
+            biometricAudio.playCelebrationChime();
+            biometricAudio.speakGeoCaptured();
+            showToast("success", "Geo-Tagged Photo Saved!", "Photo watermarked with GPS coordinates & fingerprint stamp.");
+
+            // Refresh profile and gallery
+            fetchDashboardProfile();
+        } else {
+            showToast("error", "Capture Error", data.message || "Could not record geo-tagged photo.");
+        }
+    } catch (err) {
+        showToast("error", "Capture Failed", err.message);
+    } finally {
+        btnSnapGeotagPhoto.disabled = false;
+        btnSnapGeotagPhoto.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 4h-3.17L14.4 2H9.6L8.17 4H5c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2z"/></svg>
+            <span>Click Geo-Tagged Picture</span>
+        `;
+    }
+}
+
+function renderGeotagGallery(captures = []) {
+    const grid = document.getElementById("geotagGalleryGrid");
+    const countBadge = document.getElementById("galleryCountBadge");
+    if (!grid) return;
+
+    if (countBadge) {
+        countBadge.innerText = `${captures.length} photo${captures.length === 1 ? '' : 's'}`;
+    }
+
+    if (!captures || captures.length === 0) {
+        grid.innerHTML = `
+            <div class="gallery-empty-state">
+                <p>No geo-tagged pictures clicked yet. Verify location &amp; digital fingerprint to capture.</p>
+            </div>
+        `;
+        return;
+    }
+
+    grid.innerHTML = captures.map(c => {
+        const imgUrl = getApiUrl(c.image_url);
+        const lat = c.latitude ? c.latitude.toFixed(5) : "0.0";
+        const lon = c.longitude ? c.longitude.toFixed(5) : "0.0";
+        const time = c.created_at ? c.created_at.replace("T", " ").substring(0, 19) : "Just now";
+        const score = c.match_score ? `${c.match_score}%` : "95%";
+
+        return `
+            <div class="gallery-photo-card">
+                <div class="photo-thumb-wrap">
+                    <img src="${imgUrl}?t=${Date.now()}" alt="Geo-Tagged Photo" loading="lazy">
+                </div>
+                <div class="photo-meta-box">
+                    <span class="photo-coords">GPS: ${lat}°, ${lon}°</span>
+                    <div class="photo-badge-row">
+                        <span class="photo-score-pill">✓ ${score} MATCH</span>
+                        <span class="photo-time">${time}</span>
+                    </div>
+                    <a href="${imgUrl}" download="${c.image_path || 'geotag.jpg'}" class="btn-download-photo">
+                        📥 Download Geo-Tagged Photo
+                    </a>
+                </div>
+            </div>
+        `;
+    }).join("");
+}
+
 
 // --- Toast Notification System ---
 let toastTimeout = null;

@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import json
 import secrets
 from datetime import datetime, timedelta
 
@@ -30,9 +31,34 @@ def init_db(db_path=DEFAULT_DB_PATH):
             failed_attempts INTEGER DEFAULT 0,
             lockout_until TEXT NULL,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            last_login TEXT NULL
+            last_login TEXT NULL,
+            geo_latitude REAL NULL,
+            geo_longitude REAL NULL,
+            geo_accuracy REAL NULL,
+            geo_address TEXT NULL,
+            digital_fingerprint TEXT NULL,
+            device_hash TEXT NULL,
+            is_flagged INTEGER DEFAULT 0,
+            flag_reason TEXT NULL
         )
     ''')
+
+    # Safe column migrations if users table already exists
+    cursor.execute("PRAGMA table_info(users)")
+    existing_cols = {col["name"] for col in cursor.fetchall()}
+    columns_to_add = [
+        ("geo_latitude", "REAL NULL"),
+        ("geo_longitude", "REAL NULL"),
+        ("geo_accuracy", "REAL NULL"),
+        ("geo_address", "TEXT NULL"),
+        ("digital_fingerprint", "TEXT NULL"),
+        ("device_hash", "TEXT NULL"),
+        ("is_flagged", "INTEGER DEFAULT 0"),
+        ("flag_reason", "TEXT NULL")
+    ]
+    for col_name, col_type in columns_to_add:
+        if col_name not in existing_cols:
+            cursor.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type};")
     
     # 2. Immutable Security Audit Trail
     cursor.execute('''
@@ -57,11 +83,28 @@ def init_db(db_path=DEFAULT_DB_PATH):
             expires_at TEXT NOT NULL
         )
     ''')
+
+    # 4. Verified Geo-Tagged Photo Captures
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS geo_captures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            login_id TEXT NOT NULL,
+            image_path TEXT NOT NULL,
+            latitude REAL NOT NULL,
+            longitude REAL NOT NULL,
+            accuracy REAL,
+            address TEXT,
+            match_score REAL,
+            fingerprint_hash TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     
     # Create indexes for sub-millisecond lookups
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_login_id ON users(login_id);')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_audit_login_id ON security_audit_logs(login_id);')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_challenges_nonce ON auth_challenges(nonce);')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_geo_captures_login_id ON geo_captures(login_id);')
     
     conn.commit()
     conn.close()
@@ -74,19 +117,38 @@ def get_user_by_login_id(login_id, db_path=DEFAULT_DB_PATH):
     conn.close()
     return dict(row) if row else None
 
-def create_user(login_id, full_name, password_hash, password_salt, face_descriptor_encrypted, face_iv, avatar_path=None, db_path=DEFAULT_DB_PATH):
+def create_user(
+    login_id, full_name, password_hash, password_salt,
+    face_descriptor_encrypted, face_iv, avatar_path=None,
+    geo_data=None, fingerprint_data=None,
+    db_path=DEFAULT_DB_PATH
+):
     conn = get_connection(db_path)
     cursor = conn.cursor()
     now_str = datetime.utcnow().isoformat()
+    geo_data = geo_data or {}
+    fingerprint_data = fingerprint_data or {}
+
+    lat = geo_data.get("latitude")
+    lon = geo_data.get("longitude")
+    acc = geo_data.get("accuracy")
+    addr = geo_data.get("address")
+    fp_json = json.dumps(fingerprint_data) if fingerprint_data else None
+    dev_hash = fingerprint_data.get("device_hash") or fingerprint_data.get("hardware", {}).get("canvas_hash")
+
     try:
         cursor.execute('''
             INSERT INTO users (
                 login_id, full_name, password_hash, password_salt,
                 face_descriptor_encrypted, face_encryption_iv, avatar_path,
-                created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (login_id.strip(), full_name.strip(), password_hash, password_salt,
-              face_descriptor_encrypted, face_iv, avatar_path, now_str))
+                created_at, geo_latitude, geo_longitude, geo_accuracy, geo_address,
+                digital_fingerprint, device_hash, is_flagged, flag_reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+        ''', (
+            login_id.strip(), full_name.strip(), password_hash, password_salt,
+            face_descriptor_encrypted, face_iv, avatar_path, now_str,
+            lat, lon, acc, addr, fp_json, dev_hash
+        ))
         conn.commit()
         user_id = cursor.lastrowid
         return user_id
@@ -214,3 +276,77 @@ def get_recent_audit_logs(login_id, limit=8, db_path=DEFAULT_DB_PATH):
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+def flag_user(login_id, reason="Location or Digital Fingerprint Mismatch", db_path=DEFAULT_DB_PATH):
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE users 
+        SET is_flagged = 1, flag_reason = ? 
+        WHERE login_id = ?
+    ''', (reason, login_id.strip()))
+    conn.commit()
+    conn.close()
+
+def unflag_user(login_id, db_path=DEFAULT_DB_PATH):
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE users 
+        SET is_flagged = 0, flag_reason = NULL 
+        WHERE login_id = ?
+    ''', (login_id.strip(),))
+    conn.commit()
+    conn.close()
+
+def update_user_fingerprint_baseline(login_id, geo_data=None, fingerprint_data=None, db_path=DEFAULT_DB_PATH):
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    geo_data = geo_data or {}
+    fingerprint_data = fingerprint_data or {}
+
+    lat = geo_data.get("latitude")
+    lon = geo_data.get("longitude")
+    acc = geo_data.get("accuracy")
+    addr = geo_data.get("address")
+    fp_json = json.dumps(fingerprint_data) if fingerprint_data else None
+    dev_hash = fingerprint_data.get("device_hash") or fingerprint_data.get("hardware", {}).get("canvas_hash")
+
+    cursor.execute('''
+        UPDATE users
+        SET geo_latitude = ?, geo_longitude = ?, geo_accuracy = ?,
+            geo_address = ?, digital_fingerprint = ?, device_hash = ?
+        WHERE login_id = ?
+    ''', (lat, lon, acc, addr, fp_json, dev_hash, login_id.strip()))
+    conn.commit()
+    conn.close()
+
+def save_geo_capture(login_id, image_path, latitude, longitude, accuracy=None, address=None, match_score=None, fingerprint_hash=None, db_path=DEFAULT_DB_PATH):
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    now_str = datetime.utcnow().isoformat()
+    try:
+        cursor.execute('''
+            INSERT INTO geo_captures (
+                login_id, image_path, latitude, longitude, accuracy, address, match_score, fingerprint_hash, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (login_id.strip(), image_path, latitude, longitude, accuracy, address, match_score, fingerprint_hash, now_str))
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+def get_user_geo_captures(login_id, limit=20, db_path=DEFAULT_DB_PATH):
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, login_id, image_path, latitude, longitude, accuracy, address, match_score, fingerprint_hash, created_at
+        FROM geo_captures
+        WHERE login_id = ?
+        ORDER BY id DESC
+        LIMIT ?
+    ''', (login_id.strip(), limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+

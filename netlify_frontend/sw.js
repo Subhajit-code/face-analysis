@@ -1,13 +1,14 @@
 /**
  * FaceVault Progressive Web App (PWA) Service Worker
  */
-const CACHE_NAME = 'facevault-cache-v1';
+const CACHE_NAME = 'facevault-cache-v2';
 const STATIC_ASSETS = [
     '/',
     '/static/css/style.css',
     '/static/js/app.js',
     '/static/js/camera.js',
     '/static/js/audio.js',
+    '/static/js/fingerprint.js',
     '/static/img/icon-192.png',
     '/static/img/icon-512.png',
     '/static/img/apple-touch-icon.png',
@@ -24,7 +25,13 @@ const STATIC_ASSETS = [
     '/static/audio_cache/registered_female.mp3',
     '/static/audio_cache/registered_male.mp3',
     '/static/audio_cache/credentials_female.mp3',
-    '/static/audio_cache/credentials_male.mp3'
+    '/static/audio_cache/credentials_male.mp3',
+    '/static/audio_cache/geo_restricted_female.mp3',
+    '/static/audio_cache/geo_restricted_male.mp3',
+    '/static/audio_cache/geo_verified_female.mp3',
+    '/static/audio_cache/geo_verified_male.mp3',
+    '/static/audio_cache/geo_captured_female.mp3',
+    '/static/audio_cache/geo_captured_male.mp3'
 ];
 
 // Install event: cache app shell assets

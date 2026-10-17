@@ -83,7 +83,9 @@ def extract_face_data(img: np.ndarray, face) -> tuple[list[float], tuple[int, in
 def compare_faces(
     desc1: list[float],
     desc2: list[float],
-    min_confidence: int = 80              # User specification: ONLY grant entry if confidence is at least 80%
+    min_confidence: int = 80,              # User specification: ONLY grant entry if confidence is at least 80%
+    cosine_threshold: float = None,
+    **kwargs
 ) -> tuple[bool, float, float, int, bool]:
     """
     Compares two unit-normalized 128-d face descriptors:

@@ -234,6 +234,13 @@
                                     </button>
                                 </div>
                             </div>
+                        <!-- Live Geo Coordinates & Digital Fingerprint Enrollment Status -->
+                        <div class="geo-status-indicator" id="regGeoStatusBox">
+                            <div class="geo-status-dot"></div>
+                            <div class="geo-status-details">
+                                <span class="geo-title">Digital Network &amp; Location Baseline</span>
+                                <span class="geo-desc" id="regGeoDesc">📍 Detecting GPS coordinates, router gateway, and device hardware signature...</span>
+                            </div>
                         </div>
 
                         <button type="submit" class="cyber-btn primary-btn btn-register-submit" id="btnRegisterSubmit">
@@ -264,6 +271,16 @@
                     </button>
                 </div>
 
+                <!-- Security Status Banner (Normal vs Flagged) -->
+                <div class="security-banner banner-safe" id="dashSecurityBanner">
+                    <div class="banner-icon" id="dashBannerIcon">🛡️</div>
+                    <div class="banner-body">
+                        <h4 id="dashBannerTitle">Biometric &amp; Digital Fingerprint Baseline Active</h4>
+                        <p id="dashBannerMessage">Your device hardware hash and geographic coordinates are cryptographically registered.</p>
+                    </div>
+                    <span class="banner-badge badge-safe" id="dashBannerBadge">STATUS: SECURE</span>
+                </div>
+
                 <!-- Dashboard Statistics Cards -->
                 <div class="stats-grid">
                     <div class="stat-card">
@@ -287,6 +304,162 @@
                             <span class="stat-val text-success">Active &amp; Secure</span>
                         </div>
                     </div>
+                </div>
+
+                <!-- Geo-Tagged Camera & Digital Fingerprint Enforcement Section -->
+                <div class="geotag-camera-section">
+                    <div class="geotag-header">
+                        <div class="geotag-title-group">
+                            <div class="geotag-badge">RESTRICTED FIELD ACCESS</div>
+                            <h3>📸 Geo-Tagged Camera &amp; Digital Fingerprint Verification</h3>
+                            <p class="geotag-sub">Enforces strict location proximity and network router matching. <strong>Requires &ge; 80% match confidence</strong> to open hardware camera.</p>
+                        </div>
+                        <div class="tester-sim-control">
+                            <span class="sim-label">Demo Testing Mode:</span>
+                            <select id="simModeSelect" onchange="handleSimulationModeChange(this.value)">
+                                <option value="normal" selected>🟢 Normal (Real Live GPS &amp; Device FP &ge; 80%)</option>
+                                <option value="imposter">🔴 Test Restriction (Simulate 5 km departure &amp; changed router &rarr; Score &lt; 80%)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Telemetry Inspector Cards -->
+                    <div class="telemetry-grid">
+                        <div class="telemetry-card">
+                            <span class="telemetry-label">Registered GPS Baseline</span>
+                            <span class="telemetry-val" id="dashRegCoords">Acquiring...</span>
+                            <span class="telemetry-meta" id="dashRegLocality">Sector: Registered Base</span>
+                        </div>
+                        <div class="telemetry-card">
+                            <span class="telemetry-label">Current GPS Sensor</span>
+                            <span class="telemetry-val" id="dashCurrCoords">Detecting...</span>
+                            <span class="telemetry-meta text-cyan" id="dashGeoDistance">Deviation: 0.0 m</span>
+                        </div>
+                        <div class="telemetry-card">
+                            <span class="telemetry-label">Network &amp; Tower Signature</span>
+                            <span class="telemetry-val" id="dashTowerSig">TOWER-SCANNING</span>
+                            <span class="telemetry-meta" id="dashGatewayIp">Gateway: 192.168.1.1</span>
+                        </div>
+                        <div class="telemetry-card">
+                            <span class="telemetry-label">Hardware Device Hash</span>
+                            <span class="telemetry-val" id="dashDeviceHash">FP-SCANNING</span>
+                            <span class="telemetry-meta text-success" id="dashHwStatus">Canvas/WebGL: Matched</span>
+                        </div>
+                    </div>
+
+                    <!-- Main Trigger Bar -->
+                    <div class="geotag-trigger-bar">
+                        <button type="button" class="cyber-btn primary-btn" id="btnOpenGeotagCamera" onclick="handleOpenGeotagCamera()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                            <span>Open Camera for Geo-Tag Capture</span>
+                        </button>
+                        <button type="button" class="cyber-btn secondary-btn hidden" id="btnCloseGeotagCamera" onclick="closeGeotagCamera()">
+                            <span>Close Camera</span>
+                        </button>
+                    </div>
+
+                    <!-- Interactive Camera HUD / Restriction Shield -->
+                    <div class="geotag-camera-box hidden" id="geotagCameraBox">
+                        
+                        <!-- Cyber Camera Frame -->
+                        <div class="camera-hud-container geotag-hud" id="geotagHudContainer">
+                            <div class="hud-corner top-left"></div>
+                            <div class="hud-corner top-right"></div>
+                            <div class="hud-corner bottom-left"></div>
+                            <div class="hud-corner bottom-right"></div>
+
+                            <!-- Real-time HUD Telemetry -->
+                            <div class="hud-telemetry">
+                                <span class="hud-tag" id="hudGeoStatusTag"><span class="hud-pulse"></span> GPS: LOCKED</span>
+                                <span class="hud-tag" id="hudMatchScoreTag">MATCH: 98% (VERIFIED)</span>
+                                <span class="hud-tag">WATERMARK: ARMED</span>
+                            </div>
+
+                            <!-- Video & Canvas -->
+                            <video id="geotagVideo" autoplay playsinline muted></video>
+                            <canvas id="geotagCanvas" class="hidden"></canvas>
+
+                            <!-- Holographic Crosshair Target -->
+                            <div class="facial-target-oval">
+                                <div class="target-crosshair center-h"></div>
+                                <div class="target-crosshair center-v"></div>
+                            </div>
+
+                            <!-- Live GPS Watermark Stamp Overlay -->
+                            <div class="live-watermark-overlay" id="liveWatermarkOverlay">
+                                <div class="watermark-line line-main">
+                                    <span class="badge-tag">GEO-TAGGED SENSOR</span>
+                                    <span id="wmLiveCoords">LAT: --.----, LON: --.----</span>
+                                </div>
+                                <div class="watermark-line line-sub">
+                                    <span id="wmLiveUser">USER: Authenticated</span>
+                                    <span id="wmLiveTime">UTC: --:--:--</span>
+                                    <span id="wmLiveHash">FP: VERIFIED</span>
+                                </div>
+                            </div>
+
+                            <!-- RESTRICTION LOCKOUT SHIELD OVERLAY (Shown when < 80% match) -->
+                            <div class="camera-restriction-shield hidden" id="cameraRestrictionShield">
+                                <div class="shield-lock-icon">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                                        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                                    </svg>
+                                </div>
+                                <div class="shield-pulse-ring"></div>
+                                <h3 class="shield-title">CAMERA ACCESS RESTRICTED</h3>
+                                <p class="shield-subtitle">Digital Fingerprint &amp; Location Verification Failed</p>
+                                
+                                <div class="shield-score-box">
+                                    <span class="shield-score-val" id="shieldScoreVal">42.5%</span>
+                                    <span class="shield-score-label">Match Confidence (Required: &ge; 80%)</span>
+                                </div>
+
+                                <div class="shield-reasons-box" id="shieldReasonsList">
+                                    <div class="shield-reason-item">
+                                        <span>📍 Location Deviation: Sector mismatch from registered coordinates.</span>
+                                    </div>
+                                    <div class="shield-reason-item">
+                                        <span>🌐 Network Discrepancy: Foreign gateway router and tower signature detected.</span>
+                                    </div>
+                                </div>
+
+                                <div class="shield-flag-notice">
+                                    <span class="flag-icon">⚠️</span>
+                                    <span><strong>Incident Flagged:</strong> Hardware camera access blocked and recorded in immutable audit log.</span>
+                                </div>
+
+                                <div class="shield-audio-indicator">
+                                    <span class="audio-wave-anim">🔊</span>
+                                    <span>Voice alert playing: <em>"Your digital fingerprints do not match. You are restricted to open the camera and flagged."</em></span>
+                                </div>
+                            </div>
+
+                        </div>
+
+                        <!-- Camera Actions -->
+                        <div class="camera-actions" id="geotagCameraActions">
+                            <button type="button" class="cyber-btn scan-btn" id="btnSnapGeotagPhoto" onclick="captureGeotagPhoto()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 4h-3.17L14.4 2H9.6L8.17 4H5c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2z"/></svg>
+                                <span>Click Geo-Tagged Picture</span>
+                            </button>
+                        </div>
+
+                    </div>
+
+                    <!-- Geo-Tagged Photographs Archive / Gallery -->
+                    <div class="geotag-gallery-card">
+                        <div class="gallery-header">
+                            <h4>Verified Geo-Tagged Photographs Archive</h4>
+                            <span class="gallery-count" id="galleryCountBadge">0 photos</span>
+                        </div>
+                        <div class="gallery-grid" id="geotagGalleryGrid">
+                            <div class="gallery-empty-state" id="galleryEmptyState">
+                                <p>No geo-tagged pictures clicked yet. Verify location &amp; digital fingerprint to capture.</p>
+                            </div>
+                        </div>
+                    </div>
+
                 </div>
 
                 <!-- Security Audit Trail -->
@@ -428,6 +601,7 @@
     <!-- Scripts -->
     <script src="/static/js/audio.js"></script>
     <script src="/static/js/camera.js"></script>
+    <script src="/static/js/fingerprint.js"></script>
     <script src="/static/js/app.js"></script>
 </body>
 </html>
