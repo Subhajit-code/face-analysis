@@ -70,6 +70,41 @@ def check_image_quality(img: np.ndarray) -> tuple[bool, str, np.ndarray]:
     
     return True, "Quality OK", processed_img
 
+def verify_head_turn_challenge(yaw_proxies: list[float], direction: str) -> tuple[bool, str]:
+    """
+    Verifies an active liveness challenge: the user was asked to turn their head LEFT or RIGHT
+    and back, and this checks the sequence of per-frame yaw proxies (see
+    security.biometric.compute_yaw_proxy) actually moved that way. Unlike passive frame-diff
+    motion, this can't be satisfied by wiggling a printed photo or looping a static video,
+    since the specific instructed direction is chosen at random per login attempt and only
+    revealed to the user at challenge time.
+    """
+    valid = [y for y in yaw_proxies if y is not None]
+    if len(valid) < 2:
+        return False, "Not enough tracked frames to verify the head-turn challenge. Please try again."
+
+    min_y = min(valid)
+    max_y = max(valid)
+    swing = max_y - min_y
+
+    # Require a clearly intentional turn, not natural head-hold jitter.
+    MIN_SWING = 0.045
+
+    if swing < MIN_SWING:
+        return False, "No head turn detected. Please clearly turn your head as instructed."
+
+    if direction == "TURN_RIGHT":
+        # Convention: nose offset decreases (goes more negative) during a rightward turn.
+        if min_y > -MIN_SWING * 0.6:
+            return False, "Head turn did not match the instructed direction (RIGHT). Please retry."
+    elif direction == "TURN_LEFT":
+        if max_y < MIN_SWING * 0.6:
+            return False, "Head turn did not match the instructed direction (LEFT). Please retry."
+    else:
+        return True, "Head-turn challenge skipped (no direction set)."
+
+    return True, "Head-turn challenge verified."
+
 def verify_liveness(frames: list[np.ndarray], face_boxes: list[tuple[int, int, int, int]]) -> tuple[bool, str, float]:
     """
     Evaluates anti-spoofing across multiple sequential frames:

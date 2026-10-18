@@ -57,6 +57,47 @@ def detect_faces(img: np.ndarray) -> tuple[int, list]:
             
     return len(valid_faces), valid_faces
 
+def compute_yaw_proxy(face) -> float:
+    """
+    Estimates head yaw (left/right turn) from YuNet's 5-point landmarks without a separate
+    pose-estimation model. YuNet's output per face is
+    [x, y, w, h, x_re, y_re, x_le, y_le, x_nt, y_nt, x_rcm, y_rcm, x_lcm, y_lcm, score]
+    (right eye, left eye, nose tip, right mouth corner, left mouth corner).
+    When the head is frontal, the nose tip sits roughly at the eye midpoint's x-coordinate.
+    Turning the head shifts the nose tip off-center relative to the eyes; the direction and
+    magnitude of that offset (normalized by face width) is a cheap, model-free yaw proxy used
+    to verify an active head-turn liveness challenge.
+    """
+    face_w = float(face[2]) or 1.0
+    eye_mid_x = (float(face[4]) + float(face[6])) / 2.0
+    nose_x = float(face[8])
+    return (nose_x - eye_mid_x) / face_w
+
+def compute_face_quality(img: np.ndarray, bbox: tuple[int, int, int, int]) -> tuple[bool, str, float]:
+    """
+    Gates out low-quality frames before they reach recognition/liveness: faces that are too
+    small (far from camera / low-res crop) or too blurry (motion blur, bad focus, or a flat
+    printed-photo texture) are unreliable for both matching and anti-spoof checks.
+    Returns: (ok, message, laplacian_variance)
+    """
+    x, y, w, h = bbox
+    if w < 80 or h < 80:
+        return False, "Face is too small/far from the camera. Please move closer.", 0.0
+
+    crop = img[max(0, y):y + h, max(0, x):x + w]
+    if crop.size == 0:
+        return False, "Face crop out of bounds.", 0.0
+
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+    # Real skin has fine micro-texture; a flat printed photo or a low-res screen replay tends
+    # to have unnaturally low Laplacian variance once blur from camera motion is accounted for.
+    if lap_var < 15.0:
+        return False, "Image is too blurry or unnaturally flat (possible photo/print spoof). Please use a live camera feed in good focus.", lap_var
+
+    return True, "OK", lap_var
+
 def extract_face_data(img: np.ndarray, face) -> tuple[list[float], tuple[int, int, int, int], np.ndarray]:
     """
     Aligns, crops, and extracts unit-normalized 128-d biometric embedding for a given face.

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">FaceVault</string>
+    <string name="title_activity_main">FaceVault</string>
+    <string name="package_name">com.influcon.facevault</string>
+    <string name="custom_url_scheme">com.influcon.facevault</string>
+</resources>

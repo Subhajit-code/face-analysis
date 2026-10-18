@@ -1,7 +1,7 @@
 /**
  * FaceVault Progressive Web App (PWA) Service Worker
  */
-const CACHE_NAME = 'facevault-cache-v2';
+const CACHE_NAME = 'facevault-cache-v3';
 const STATIC_ASSETS = [
     '/',
     '/static/css/style.css',
@@ -56,7 +56,12 @@ self.addEventListener('activate', (event) => {
     );
 });
 
-// Fetch event: network-first for API, cache-first for static shell
+// Fetch event: network-first for everything. This means a fresh deploy is picked up on the
+// very next load without anyone needing to manually clear site data — the service worker only
+// ever falls back to its cache when the network request actually fails (i.e. genuinely offline).
+// (A pure cache-first strategy was used previously, which is why deployed changes kept appearing
+// stale: once a file was cached, it was served forever regardless of what was actually deployed,
+// since nothing ever forced a fresh network fetch for it again.)
 self.addEventListener('fetch', (event) => {
     const url = new URL(event.request.url);
 
@@ -65,20 +70,16 @@ self.addEventListener('fetch', (event) => {
         return event.respondWith(fetch(event.request));
     }
 
-    // Cache-first falling back to network for static shell
     event.respondWith(
-        caches.match(event.request).then((cachedResponse) => {
-            if (cachedResponse) {
-                return cachedResponse;
+        fetch(event.request).then((networkResponse) => {
+            if (networkResponse && networkResponse.status === 200 && event.request.method === 'GET') {
+                const clone = networkResponse.clone();
+                caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
             }
-            return fetch(event.request).then((networkResponse) => {
-                if (networkResponse && networkResponse.status === 200 && event.request.method === 'GET') {
-                    const clone = networkResponse.clone();
-                    caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-                }
-                return networkResponse;
-            }).catch(() => {
-                // If offline and request is for page, return cached root
+            return networkResponse;
+        }).catch(() => {
+            return caches.match(event.request).then((cachedResponse) => {
+                if (cachedResponse) return cachedResponse;
                 if (event.request.mode === 'navigate') {
                     return caches.match('/');
                 }

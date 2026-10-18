@@ -1,0 +1,9 @@
+{
+  "appId": "com.influcon.facevault",
+  "appName": "FaceVault",
+  "webDir": "www",
+  "server": {
+    "url": "https://geology-portrait-bit-elegant.trycloudflare.com",
+    "cleartext": false
+  }
+}

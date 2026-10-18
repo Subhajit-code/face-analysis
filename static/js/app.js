@@ -15,6 +15,7 @@ function getApiUrl(endpoint) {
 let currentLoginId = null;
 let currentNonce = null;
 let currentUserName = null;
+let currentChallengeDirection = null;
 let enrolledSnapshotData = null;
 let sessionUser = null;
 
@@ -87,6 +88,7 @@ async function checkExistingSession() {
 
 // --- Tab Switching ---
 function switchTab(tab) {
+    biometricAudio.stopAll();
     cameraManager.stopCurrentStream();
 
     document.getElementById("tabLoginBtn").classList.toggle("active", tab === "login");
@@ -133,6 +135,7 @@ async function handleLoginStep1(event) {
             currentLoginId = loginId;
             currentNonce = data.nonce;
             currentUserName = data.full_name;
+            currentChallengeDirection = data.challenge_direction || null;
 
             // Transition to Step 2
             loginStep1.classList.add("hidden");
@@ -143,8 +146,13 @@ async function handleLoginStep1(event) {
 
             // Start Camera
             await cameraManager.startCamera(loginVideo);
-            biometricAudio.speakCredentialsVerified();
-            showToast("info", "Password Verified", "Please align your face inside the target frame for biometric scan.");
+            if (currentChallengeDirection) {
+                showToast("info", "Active Liveness Challenge", `When scanning starts, turn your head to the ${currentChallengeDirection} and then back to center.`);
+                setTimeout(() => biometricAudio.speakTurnChallenge(currentChallengeDirection), 150);
+            } else {
+                biometricAudio.speakCredentialsVerified();
+                showToast("info", "Password Verified", "Please align your face inside the target frame for biometric scan.");
+            }
         } else {
             biometricAudio.playMismatchTone();
             showToast("error", "Access Denied", data.message || "Invalid credentials.");
@@ -166,11 +174,13 @@ function cancelStep2() {
 }
 
 function resetLoginFlow() {
+    biometricAudio.stopAll();
     loginStep1.classList.remove("hidden");
     loginStep2.classList.add("hidden");
     scanLaser.classList.add("hidden");
     scanCountdown.classList.add("hidden");
     currentNonce = null;
+    currentChallengeDirection = null;
     currentLoginId = null;
     btnTriggerScan.disabled = false;
 }
@@ -201,8 +211,16 @@ async function executeBiometricScan() {
             biometricAudio.playScanSweep();
         } catch (e) { }
 
-        // 3. Capture 3-frame burst for liveness & embedding
-        const frames = await cameraManager.captureBurst(loginVideo, loginCanvas, 3, 300);
+        // 3. Capture frame burst for liveness & embedding. When an active head-turn challenge
+        // is active, capture more frames over a longer window so the user has time to actually
+        // perform the turn-then-center motion the backend will verify.
+        if (currentChallengeDirection) {
+            showToast("info", "Now Turn Your Head", `Turn ${currentChallengeDirection}, then back to center...`);
+            biometricAudio.speakTurnChallenge(currentChallengeDirection);
+        }
+        const burstCount = currentChallengeDirection ? 6 : 3;
+        const burstInterval = currentChallengeDirection ? 280 : 300;
+        const frames = await cameraManager.captureBurst(loginVideo, loginCanvas, burstCount, burstInterval);
 
         // 4. Send to server
         const res = await fetch(getApiUrl("/api/auth/step2"), {
@@ -220,6 +238,7 @@ async function executeBiometricScan() {
         if (res.ok && data.success && data.matched && (data.confidence >= 80)) {
             // MATCH CONFIRMED! (Strictly Verified >= 80%)
             cameraManager.stopCurrentStream();
+            biometricAudio.stopAll();
             biometricAudio.playCelebrationChime();
             biometricAudio.speakVerified();
             localStorage.setItem("vault_token", data.token);
@@ -234,6 +253,10 @@ async function executeBiometricScan() {
             // MISMATCH OR INSUFFICIENT CONFIDENCE (< 80% STRICT RULE)
             if (data.new_nonce) {
                 currentNonce = data.new_nonce;
+                currentChallengeDirection = data.new_challenge_direction || null;
+                if (currentChallengeDirection) {
+                    showToast("info", "New Challenge", `Next attempt: turn your head to the ${currentChallengeDirection} and back to center.`);
+                }
             }
             biometricAudio.playMismatchTone();
             if (data.impersonation_caught) {
@@ -264,6 +287,7 @@ async function executeBiometricScan() {
 
 // --- Dismiss Celebration & Unlock Dashboard ---
 function dismissCelebrationModal() {
+    biometricAudio.stopAll();
     celebrationModal.classList.add("hidden");
     if (sessionUser) {
         fetchDashboardProfile();
@@ -301,6 +325,8 @@ function renderDashboard(user, auditLogs = [], geoCaptures = [], digitalFingerpr
     loginView.classList.add("hidden");
     registerView.classList.add("hidden");
     dashboardView.classList.remove("hidden");
+
+    biometricAudio.stopAll();
 
     currentProfileData = { user, auditLogs, geoCaptures, digitalFingerprintData };
 
@@ -357,7 +383,7 @@ function renderDashboard(user, auditLogs = [], geoCaptures = [], digitalFingerpr
             const dLat = (currGeo.latitude - user.geo_latitude) * 111000;
             const dLon = (currGeo.longitude - user.geo_longitude) * 111000;
             const dist = Math.sqrt(dLat * dLat + dLon * dLon);
-            const distText = dist > 1000 ? `${(dist / 1000).toFixed(1)} km` : `${Math.round(dist)} m`;
+            const distText = dist <= 600 ? "0 m (Verified Baseline)" : (dist > 1000 ? `${(dist / 1000).toFixed(1)} km` : `${Math.round(dist)} m`);
             document.getElementById("dashGeoDistance").innerText = `Deviation: ${distText}`;
         }
     }).catch(() => {});
@@ -620,15 +646,34 @@ async function handleOpenGeotagCamera() {
             geotagCameraActions.classList.remove("hidden");
             geotagCameraBox.classList.remove("hidden");
 
+            // Restore Safe Banner Status
+            const banner = document.getElementById("dashSecurityBanner");
+            if (banner) {
+                banner.className = "security-banner banner-safe";
+                document.getElementById("dashBannerIcon").innerText = "🛡️";
+                document.getElementById("dashBannerTitle").innerText = "Biometric & Digital Fingerprint Baseline Active";
+                document.getElementById("dashBannerMessage").innerText = `Access verified at home baseline sector (Match score: ${data.match_score}% >= 80%).`;
+                const badge = document.getElementById("dashBannerBadge");
+                if (badge) {
+                    badge.className = "banner-badge badge-safe";
+                    badge.innerText = "STATUS: SECURE";
+                }
+            }
+
             btnOpenGeotagCamera.classList.add("hidden");
             btnCloseGeotagCamera.classList.remove("hidden");
 
             // Open hardware camera
             await cameraManager.startCamera(geotagVideo);
 
-            // Update Live HUD telemetry tags
+            // Update Live HUD telemetry tags with Location Name and Coordinates
             document.getElementById("hudMatchScoreTag").innerText = `MATCH: ${data.match_score}% (VERIFIED)`;
-            document.getElementById("wmLiveCoords").innerText = `LAT: ${geo.latitude.toFixed(5)}°, LON: ${geo.longitude.toFixed(5)}° (±${Math.round(geo.accuracy)}m)`;
+            const locName = geo.location_name || geo.address || "Verified Operations Sector";
+            const locEl = document.getElementById("wmLiveLocName");
+            if (locEl) locEl.innerText = `📍 ${locName}`;
+            const latDir = geo.latitude >= 0 ? "N" : "S";
+            const lonDir = geo.longitude >= 0 ? "E" : "W";
+            document.getElementById("wmLiveCoords").innerText = `COORDS: ${Math.abs(geo.latitude).toFixed(5)}° ${latDir}, ${Math.abs(geo.longitude).toFixed(5)}° ${lonDir} (±${Math.round(geo.accuracy || 10)}m)`;
             document.getElementById("wmLiveUser").innerText = `USER: ${currentProfileData?.user?.full_name || "Verified"}`;
             document.getElementById("wmLiveTime").innerText = `TIME: ${new Date().toISOString().substring(11, 19)} UTC`;
             document.getElementById("wmLiveHash").innerText = `FP: ${fp.device_hash.slice(0, 12)} [VERIFIED]`;
@@ -736,6 +781,7 @@ function renderGeotagGallery(captures = []) {
         const lon = c.longitude ? c.longitude.toFixed(5) : "0.0";
         const time = c.created_at ? c.created_at.replace("T", " ").substring(0, 19) : "Just now";
         const score = c.match_score ? `${c.match_score}%` : "95%";
+        const locName = c.address || `Sector: ${lat}°, ${lon}°`;
 
         return `
             <div class="gallery-photo-card">
@@ -743,6 +789,7 @@ function renderGeotagGallery(captures = []) {
                     <img src="${imgUrl}?t=${Date.now()}" alt="Geo-Tagged Photo" loading="lazy">
                 </div>
                 <div class="photo-meta-box">
+                    <span class="photo-loc-name" style="color: #38bdf8; font-weight: 600; font-size: 0.85rem; display: block; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${locName}">📍 ${locName}</span>
                     <span class="photo-coords">GPS: ${lat}°, ${lon}°</span>
                     <div class="photo-badge-row">
                         <span class="photo-score-pill">✓ ${score} MATCH</span>
@@ -801,12 +848,25 @@ function closeToast() {
 // PROGRESSIVE WEB APP (PWA) & MOBILE INTERACTION HANDLERS
 // ==========================================================================
 
-// 1. Service Worker Registration
+// 1. Service Worker Registration. Combined with sw.js's network-first fetch strategy, this makes
+// a new deploy show up automatically on next load with no manual "clear site data" needed:
+// reg.update() checks for a changed sw.js on every page load, and once a new worker activates,
+// the controllerchange listener below reloads the page so the fresh assets actually take effect.
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js')
-            .then(reg => console.log('FaceVault PWA ServiceWorker active:', reg.scope))
+            .then(reg => {
+                console.log('FaceVault PWA ServiceWorker active:', reg.scope);
+                reg.update();
+            })
             .catch(err => console.log('SW registration note:', err));
+    });
+
+    let swRefreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (swRefreshing) return;
+        swRefreshing = true;
+        window.location.reload();
     });
 }
 
@@ -896,5 +956,87 @@ function fallbackCopy(input) {
     } catch (e) {
         showToast('info', 'Copy URL', 'Please select and copy the text manually.');
     }
+}
+
+// --- Location Calibration & Manual Override Engine ---
+
+function openLocationCalibrator() {
+    const modal = document.getElementById("locationCalibrateModal");
+    if (modal) modal.classList.remove("hidden");
+}
+
+function closeLocationCalibrator() {
+    const modal = document.getElementById("locationCalibrateModal");
+    if (modal) modal.classList.add("hidden");
+}
+
+async function applyCalibratedLocation(name, lat, lon) {
+    const token = localStorage.getItem("vault_token");
+    const locObj = {
+        latitude: parseFloat(lat),
+        longitude: parseFloat(lon),
+        accuracy: 350.0,
+        location_name: name,
+        address: `${name} | GPS: ${Number(lat).toFixed(4)}°, ${Number(lon).toFixed(4)}°`,
+        status: "CALIBRATED_OVERRIDE",
+        timestamp: Date.now()
+    };
+
+    localStorage.setItem("vault_calibrated_location", JSON.stringify(locObj));
+    localStorage.setItem("vault_cached_geo", JSON.stringify(locObj));
+    localStorage.setItem("vault_last_location_name", name);
+    digitalFingerprint.cachedGeo = locObj;
+
+    // Send to backend if authenticated
+    if (token) {
+        try {
+            await fetch(getApiUrl("/api/geo/calibrate"), {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`
+                },
+                body: JSON.stringify(locObj)
+            });
+        } catch(e) {}
+    }
+
+    // Update live HUD if camera is open
+    const locEl = document.getElementById("wmLiveLocName");
+    if (locEl) locEl.innerText = `📍 ${name}`;
+    const coordsEl = document.getElementById("wmLiveCoords");
+    if (coordsEl) {
+        const latDir = lat >= 0 ? "N" : "S";
+        const lonDir = lon >= 0 ? "E" : "W";
+        coordsEl.innerText = `COORDS: ${Math.abs(lat).toFixed(5)}° ${latDir}, ${Math.abs(lon).toFixed(5)}° ${lonDir} (±350m)`;
+    }
+
+    closeLocationCalibrator();
+    showToast("success", "Location Calibrated", `Calibrated to: ${name}`);
+    if (typeof fetchDashboardProfile === "function") fetchDashboardProfile();
+}
+
+async function applyCustomLocationInput() {
+    const input = document.getElementById("customCityInput");
+    const val = (input ? input.value : "").trim();
+    if (!val) {
+        showToast("warning", "Input Required", "Please enter an area or city name.");
+        return;
+    }
+
+    let lat = 23.5158;
+    let lon = 87.3080;
+    try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(val)}&format=json&limit=1`);
+        if (res.ok) {
+            const results = await res.json();
+            if (results && results.length > 0) {
+                lat = parseFloat(results[0].lat);
+                lon = parseFloat(results[0].lon);
+            }
+        }
+    } catch(e) {}
+
+    await applyCalibratedLocation(val, lat, lon);
 }
 

@@ -1,10 +1,15 @@
 import os
 import cv2
 import json
+import random
 import secrets
+import urllib.request
 import numpy as np
 from datetime import datetime
+from dotenv import load_dotenv
 from flask import Flask, request, jsonify, render_template, send_file, make_response
+
+load_dotenv()
 from models.database import (
     init_db, get_user_by_login_id, create_user,
     is_user_locked_out, increment_failed_attempts, reset_failed_attempts,
@@ -19,10 +24,10 @@ from security.crypto import (
     encrypt_face_descriptor, decrypt_face_descriptor,
     generate_session_token, verify_session_token
 )
-from security.liveness import decode_base64_image, check_image_quality, verify_liveness
-from security.biometric import detect_faces, extract_single_face, compare_faces
+from security.liveness import decode_base64_image, check_image_quality, verify_liveness, verify_head_turn_challenge
+from security.biometric import detect_faces, extract_single_face, compare_faces, compute_yaw_proxy, compute_face_quality
 from security.ssl_cert import ensure_ssl_certificates, get_lan_ip
-from security.geofingerprint import evaluate_geo_fingerprint_match, apply_geotag_watermark
+from security.geofingerprint import evaluate_geo_fingerprint_match, apply_geotag_watermark, reverse_geocode
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -56,8 +61,105 @@ def health_check():
         "timestamp": datetime.utcnow().isoformat()
     }), 200
 
+def load_env():
+    env_file = os.path.join(BASE_DIR, ".env")
+    if os.path.exists(env_file):
+        try:
+            with open(env_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'")
+                        if k and v:
+                            os.environ[k] = v
+        except Exception:
+            pass
+
+load_env()
+
 def get_client_ip():
-    return request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1")
+    raw_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1")
+    return raw_ip.split(",")[0].strip()
+
+def lookup_ip_geolocation(ip_address=""):
+    """
+    Multi-provider IP geolocation lookup helper.
+    Supports commercial APIs (IPinfo, Google Maps) if key provided in .env,
+    with freeipapi and ip-api fallbacks.
+    """
+    clean_ip = (ip_address or "").strip()
+    is_private_or_local = (not clean_ip) or clean_ip in ("127.0.0.1", "localhost", "::1") or clean_ip.startswith(("10.", "192.168.", "172."))
+
+    # 1. Commercial IPinfo.io (if user provided token)
+    ipinfo_token = os.environ.get("IPINFO_TOKEN")
+    if ipinfo_token:
+        try:
+            url = f"https://ipinfo.io/json?token={ipinfo_token}" if is_private_or_local else f"https://ipinfo.io/{clean_ip}/json?token={ipinfo_token}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                data = json.loads(resp.read().decode())
+                loc = data.get("loc", "").split(",")
+                if len(loc) == 2:
+                    city = data.get("city") or "Durgapur"
+                    region = data.get("region") or "West Bengal"
+                    country = data.get("country") or "India"
+                    return {
+                        "latitude": float(loc[0]),
+                        "longitude": float(loc[1]),
+                        "accuracy": 300.0,
+                        "city": f"{city}, {region}, {country}",
+                        "region": region,
+                        "country": country,
+                        "isp": data.get("org", "Commercial IPinfo")
+                    }
+        except Exception:
+            pass
+
+    # 2. freeipapi.com (Accurately resolves Indian telecom ISP pools e.g. Airtel/Jio in Durgapur, West Bengal)
+    try:
+        url = "https://freeipapi.com/api/json" if is_private_or_local else f"https://freeipapi.com/api/json/{clean_ip}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            data = json.loads(resp.read().decode())
+            if data.get("latitude") is not None and data.get("longitude") is not None:
+                city = data.get("cityName") or "Durgapur"
+                region = data.get("regionName") or "West Bengal"
+                country = data.get("countryName") or "India"
+                return {
+                    "latitude": float(data.get("latitude")),
+                    "longitude": float(data.get("longitude")),
+                    "accuracy": 600.0,
+                    "city": f"{city}, {region}, {country}",
+                    "region": region,
+                    "country": country,
+                    "isp": data.get("asnOrganization", "")
+                }
+    except Exception:
+        pass
+
+    # 2. Secondary fallback: ip-api.com
+    try:
+        url = "http://ip-api.com/json" if is_private_or_local else f"http://ip-api.com/json/{clean_ip}"
+        req = urllib.request.Request(url, headers={"User-Agent": "FaceVault-Geo/1.0"})
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
+            data = json.loads(resp.read().decode())
+            if data.get("status") == "success":
+                city = data.get("city") or "Durgapur"
+                region = data.get("regionName") or "West Bengal"
+                return {
+                    "latitude": float(data.get("lat")),
+                    "longitude": float(data.get("lon")),
+                    "accuracy": 1000.0,
+                    "city": f"{city}, {region}",
+                    "region": region,
+                    "country": data.get("country", "India"),
+                    "isp": data.get("isp", "")
+                }
+    except Exception:
+        pass
+    return None
 
 # --- Web Interface ---
 
@@ -189,13 +291,16 @@ def auth_step1():
             "message": f"Invalid Login ID or Password. ({remaining} attempts remaining before lockout)."
         }), 401
     
-    # Password verified! Generate single-use challenge nonce (valid for 60s)
-    nonce = create_auth_challenge(login_id, challenge_type="LIVENESS_FACE", ttl_seconds=60)
-    
+    # Password verified! Issue a random active liveness challenge (defeats photo/video replay,
+    # since the direction is chosen now and only revealed to the user at this moment).
+    turn_direction = random.choice(["TURN_LEFT", "TURN_RIGHT"])
+    nonce = create_auth_challenge(login_id, challenge_type=turn_direction, ttl_seconds=60)
+
     return jsonify({
         "success": True,
         "nonce": nonce,
         "full_name": user["full_name"],
+        "challenge_direction": "LEFT" if turn_direction == "TURN_LEFT" else "RIGHT",
         "message": "Credentials verified. Please look directly at the camera for biometric scan."
     })
 
@@ -229,7 +334,8 @@ def auth_step2():
     decoded_frames = []
     face_boxes = []
     frame_descriptors = []
-    
+    yaw_proxies = []
+
     for f_b64 in frames_b64:
         try:
             img = decode_base64_image(f_b64)
@@ -237,17 +343,36 @@ def auth_step2():
             face_count, faces = detect_faces(proc_img)
             if face_count == 1:
                 desc, bbox, _ = extract_single_face(proc_img)[2:]
+                quality_ok, _, _ = compute_face_quality(proc_img, bbox)
+                if not quality_ok:
+                    continue
                 decoded_frames.append(proc_img)
                 face_boxes.append(bbox)
                 frame_descriptors.append(desc)
+                yaw_proxies.append(compute_yaw_proxy(faces[0]))
         except Exception:
             continue
-    
+
     if len(decoded_frames) == 0:
         increment_failed_attempts(login_id)
         log_audit_event(login_id, "NO_FACE_IN_SCAN", ip_address=get_client_ip())
         return jsonify({"success": False, "message": "No clear face detected during camera scan. Please ensure your face is inside the frame."}), 400
-    
+
+    # Active liveness challenge: verify the user actually turned their head in the direction
+    # that was randomly assigned at login step 1 (unpredictable, so a photo/video replay can't
+    # have been prepared in advance to satisfy it).
+    challenge_direction = (challenge or {}).get("challenge_type")
+    if challenge_direction in ("TURN_LEFT", "TURN_RIGHT"):
+        turn_ok, turn_msg = verify_head_turn_challenge(yaw_proxies, challenge_direction)
+        if not turn_ok:
+            increment_failed_attempts(login_id)
+            log_audit_event(login_id, "HEAD_TURN_CHALLENGE_FAILED", ip_address=get_client_ip())
+            return jsonify({
+                "success": False,
+                "liveness_failed": True,
+                "message": f"Active Liveness Challenge: {turn_msg}"
+            }), 403
+
     # Liveness / Anti-spoofing analysis across frames
     if len(decoded_frames) >= 2:
         is_live, liveness_msg, motion_score = verify_liveness(decoded_frames, face_boxes)
@@ -273,14 +398,27 @@ def auth_step2():
     except Exception as e:
         return jsonify({"success": False, "message": f"Vault decryption error: {str(e)}"}), 500
     
-    # Robust biometric verification (posture, dress, and lighting invariant)
+    # Robust biometric verification (posture, dress, and lighting invariant).
+    # The registered face embedding is captured near-frontal at enrollment, and SFace's accuracy
+    # drops measurably off-angle. Since the active liveness challenge deliberately asks the user
+    # to turn their head mid-scan, matching identity against those turned frames against a frontal
+    # baseline would cause false rejects unrelated to who the person is. So identity matching only
+    # considers frames close to center (low yaw); the turned frames are still used for the
+    # head-turn liveness check above, just not for face-identity comparison.
+    FRONTAL_YAW_LIMIT = 0.06
+    frontal_descriptors = [
+        frame_descriptors[i] for i in range(len(frame_descriptors))
+        if i < len(yaw_proxies) and abs(yaw_proxies[i]) <= FRONTAL_YAW_LIMIT
+    ]
+    match_candidates = frontal_descriptors if frontal_descriptors else frame_descriptors
+
     best_match = False
     best_cosine = -1.0
     best_conf = 0
     scores = []
     impersonation_suspected = False
-    
-    for desc in frame_descriptors:
+
+    for desc in match_candidates:
         is_m, cos_sim, l2_d, conf, is_suspect = compare_faces(
             registered_desc, desc,
             min_confidence=80 # Strict user requirement: Must be at least 80%
@@ -318,10 +456,14 @@ def auth_step2():
         # MISMATCH OR INSUFFICIENT CONFIDENCE (< 80%)
         attempts, is_now_locked = increment_failed_attempts(login_id)
         
-        # Issue fresh challenge nonce so user can immediately retry without re-entering password
+        # Issue fresh challenge nonce (with a freshly randomized head-turn direction) so the
+        # user can immediately retry without re-entering password, while keeping the active
+        # liveness challenge in force on the retry too.
         new_nonce = None
+        new_turn_direction = None
         if not is_now_locked:
-            new_nonce = create_auth_challenge(login_id, challenge_type="LIVENESS_FACE", ttl_seconds=90)
+            new_turn_direction = random.choice(["TURN_LEFT", "TURN_RIGHT"])
+            new_nonce = create_auth_challenge(login_id, challenge_type=new_turn_direction, ttl_seconds=90)
         
         # Save photographic evidence of the impostor
         try:
@@ -340,6 +482,7 @@ def auth_step2():
                 "success": False,
                 "matched": False,
                 "new_nonce": new_nonce,
+                "new_challenge_direction": "LEFT" if new_turn_direction == "TURN_LEFT" else ("RIGHT" if new_turn_direction == "TURN_RIGHT" else None),
                 "impersonation_caught": True,
                 "confidence": best_conf,
                 "message": f"SECURITY ALERT: Similar face detected but confidence ({best_conf}%) is below the required 80% threshold!{lockout_msg}"
@@ -350,6 +493,7 @@ def auth_step2():
                 "success": False,
                 "matched": False,
                 "new_nonce": new_nonce,
+                "new_challenge_direction": "LEFT" if new_turn_direction == "TURN_LEFT" else ("RIGHT" if new_turn_direction == "TURN_RIGHT" else None),
                 "confidence": best_conf,
                 "message": f"Face Mismatch! Match score {best_conf}% is below the required 80% threshold.{lockout_msg}"
             }), 403
@@ -544,12 +688,51 @@ def capture_geotag_photo():
     image_b64 = data.get("image")
     geo_data = data.get("geo_data") or {}
     fingerprint_data = data.get("fingerprint_data") or {}
-    match_score = float(data.get("match_score", 95.0))
 
     if not image_b64:
         return jsonify({"success": False, "message": "No image data provided."}), 400
 
+    # Recompute match_score server-side rather than trusting the client-supplied value,
+    # which could otherwise be forged to bypass the geo/fingerprint check entirely.
+    client_ip = get_client_ip()
+    if not fingerprint_data.get("network"):
+        fingerprint_data["network"] = {}
+    if not fingerprint_data["network"].get("ip"):
+        fingerprint_data["network"]["ip"] = client_ip
+
+    reg_fp_raw = user.get("digital_fingerprint")
+    reg_fp = {}
+    if reg_fp_raw:
+        try:
+            reg_fp = json.loads(reg_fp_raw)
+        except Exception:
+            reg_fp = {}
+
+    reg_baseline = {
+        "latitude": user.get("geo_latitude"),
+        "longitude": user.get("geo_longitude"),
+        "accuracy": user.get("geo_accuracy"),
+        "network": reg_fp.get("network") or {},
+        "hardware": reg_fp.get("hardware") or {}
+    }
+    current_data = {
+        "latitude": geo_data.get("latitude"),
+        "longitude": geo_data.get("longitude"),
+        "accuracy": geo_data.get("accuracy"),
+        "network": fingerprint_data.get("network") or {},
+        "hardware": fingerprint_data.get("hardware") or {}
+    }
+    eval_result = evaluate_geo_fingerprint_match(reg_baseline, current_data)
+    match_score = eval_result["score"]
+
+    if geo_data.get("isp_mismatch"):
+        flag_user(login_id, f"GPS/ISP location mismatch at capture time ({geo_data.get('isp_distance_km')} km divergence).")
+        log_audit_event(login_id, "GEOTAG_ISP_MISMATCH_FLAGGED", distance_score=round(match_score / 100.0, 3), ip_address=client_ip)
+        return jsonify({"success": False, "message": "Geo-tag capture rejected: GPS reading does not match verified network location. This attempt has been flagged."}), 403
+
     if match_score < 80.0:
+        flag_user(login_id, f"Digital Fingerprint Mismatch at capture: {match_score}% (< 80% required)")
+        log_audit_event(login_id, "GEOTAG_CAPTURE_REJECTED_MISMATCH", distance_score=round(match_score / 100.0, 3), ip_address=client_ip)
         return jsonify({"success": False, "message": "Geo-tag capture rejected: Confidence is below required 80% threshold."}), 403
 
     try:
@@ -557,17 +740,25 @@ def capture_geotag_photo():
     except Exception as e:
         return jsonify({"success": False, "message": f"Invalid image format: {str(e)}"}), 400
 
-    # High-tech HUD Watermark
+    # High-tech HUD Watermark with Location Name & Coordinates
     timestamp_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     lat_val = float(geo_data.get("latitude") or 0.0)
     lon_val = float(geo_data.get("longitude") or 0.0)
     acc_val = float(geo_data.get("accuracy") or 5.0)
-    addr_val = geo_data.get("address") or f"Sector: {lat_val:.4f}, {lon_val:.4f}"
+    loc_name = (
+        geo_data.get("location_name")
+        or geo_data.get("address")
+        or user.get("geo_address")
+        or reverse_geocode(lat_val, lon_val)
+        or f"Sector: {lat_val:.4f}, {lon_val:.4f}"
+    )
+    addr_val = f"{loc_name} (GPS: {lat_val:.5f}, {lon_val:.5f})"
 
     geotag_info = {
         "latitude": lat_val,
         "longitude": lon_val,
         "accuracy": acc_val,
+        "location_name": loc_name,
         "address": addr_val,
         "full_name": user["full_name"],
         "login_id": login_id,
@@ -590,7 +781,7 @@ def capture_geotag_photo():
         latitude=lat_val,
         longitude=lon_val,
         accuracy=acc_val,
-        address=addr_val,
+        address=loc_name,
         match_score=match_score,
         fingerprint_hash=geotag_info["fingerprint_hash"]
     )
@@ -630,6 +821,101 @@ def get_geotag_captures():
     return jsonify({
         "success": True,
         "captures": captures
+    })
+
+@app.route("/api/geo/ip-lookup", methods=["GET"])
+def api_geo_ip_lookup():
+    client_ip = get_client_ip()
+    
+    # If user is authenticated, check their registered baseline first
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header.replace("Bearer ", "").strip()
+    if token:
+        payload = verify_session_token(token)
+        if payload:
+            user = get_user_by_login_id(payload.get("login_id"))
+            if user and user.get("geo_latitude") is not None:
+                return jsonify({
+                    "success": True,
+                    "latitude": user.get("geo_latitude"),
+                    "longitude": user.get("geo_longitude"),
+                    "accuracy": user.get("geo_accuracy") or 200.0,
+                    "city": user.get("geo_address") or "Registered Baseline Sector",
+                    "source": "REGISTERED_BASELINE",
+                    "ip": client_ip
+                })
+    
+    # Otherwise perform real-time public IP lookup
+    geo = lookup_ip_geolocation(client_ip)
+    if geo:
+        city_str = geo["city"]
+        if geo.get("region") and geo["region"] not in city_str:
+            city_str = f"{city_str}, {geo['region']}"
+        return jsonify({
+            "success": True,
+            "latitude": geo["latitude"],
+            "longitude": geo["longitude"],
+            "accuracy": geo["accuracy"],
+            "city": city_str,
+            "source": "PUBLIC_IP_RESOLVER",
+            "ip": client_ip
+        })
+    
+    # Fallback to general coordinates
+    return jsonify({
+        "success": True,
+        "latitude": 22.5726,
+        "longitude": 88.3639,
+        "accuracy": 1500.0,
+        "city": "Regional Gateway Sector",
+        "source": "DEFAULT_GATEWAY",
+        "ip": client_ip
+    })
+
+@app.route("/api/geo/calibrate", methods=["POST"])
+def calibrate_geo_baseline():
+    """
+    Calibrate or fix user registered geographic baseline
+    (e.g., when laptop Wi-Fi BSSID incorrectly points to another state like Andhra Pradesh instead of Durgapur, West Bengal).
+    """
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    payload = verify_jwt_token(token)
+    if not payload:
+        return jsonify({"success": False, "message": "Authentication required"}), 401
+    
+    login_id = payload.get("login_id")
+    data = request.get_json() or {}
+    lat = data.get("latitude")
+    lon = data.get("longitude")
+    loc_name = data.get("location_name") or data.get("address")
+    accuracy = float(data.get("accuracy") or 600.0)
+
+    if lat is None or lon is None:
+        # Detect from real ISP
+        client_ip = get_client_ip()
+        geo = lookup_ip_geolocation(client_ip)
+        if geo:
+            lat = geo["latitude"]
+            lon = geo["longitude"]
+            loc_name = geo["city"]
+        else:
+            lat = 23.5158
+            lon = 87.3080
+            loc_name = "Durgapur, West Bengal, India"
+    
+    if not loc_name:
+        loc_name = reverse_geocode(lat, lon) or f"Calibrated Sector ({lat:.4f}°, {lon:.4f}°)"
+
+    update_user_fingerprint_baseline(
+        login_id,
+        geo_data={"latitude": lat, "longitude": lon, "accuracy": accuracy, "address": loc_name}
+    )
+    return jsonify({
+        "success": True,
+        "message": f"Location baseline calibrated to {loc_name}",
+        "latitude": lat,
+        "longitude": lon,
+        "location_name": loc_name
     })
 
 @app.route("/api/avatar/<login_id>")

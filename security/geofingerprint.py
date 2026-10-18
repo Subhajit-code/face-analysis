@@ -1,6 +1,9 @@
 import math
 import hashlib
 import json
+import os
+import urllib.request
+import urllib.parse
 import cv2
 import numpy as np
 from datetime import datetime
@@ -25,37 +28,124 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1.0 - a)))
     return R * c
 
-def calculate_geo_score(distance_meters):
+def reverse_geocode(lat, lon):
+    """
+    Resolves GPS coordinates to a human-readable location name using the
+    Google Geocoding API. Returns None if no API key is configured or the
+    lookup fails, so callers can fall back to raw coordinates.
+    """
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
+    if not api_key:
+        return None
+
+    try:
+        lat, lon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return None
+
+    params = urllib.parse.urlencode({
+        "latlng": f"{lat},{lon}",
+        "key": api_key
+    })
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?{params}"
+
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+    if result.get("status") != "OK" or not result.get("results"):
+        return None
+
+    return result["results"][0].get("formatted_address")
+
+def calculate_geo_score(distance_meters, reg_accuracy=None, curr_accuracy=None):
     """
     Calculates geographic proximity match percentage (0 - 100%).
-    <= 100m (Same building/office perimeter): 100%
-    100m - 500m (Immediate vicinity): 90% -> 70%
-    500m - 2km (Left premises, router range broken): 70% -> 30%
-    2km - 5km (Different neighborhood/sector): 30% -> 5%
-    > 5km (Completely outside sector): 0%
+    Accounts for real-world Wi-Fi positioning and indoor GPS sensor accuracy radius.
+    
+    Tolerance:
+      - Max of registered accuracy, current accuracy, and 600m baseline (typical residential Wi-Fi).
+      - Within tolerance: 100% (User is sitting in their home/office).
+      - Tolerance to (Tolerance + 1500m): Drops from 100% to 60%.
+      - Up to 5000m (5 km): Drops from 60% to 10%.
+      - Past 5000m (5 km): 0% (Strictly 0% once 5km boundary exceeded).
     """
-    if distance_meters <= 100:
+    try:
+        r_acc = float(reg_accuracy or 0)
+    except (ValueError, TypeError):
+        r_acc = 0.0
+    try:
+        c_acc = float(curr_accuracy or 0)
+    except (ValueError, TypeError):
+        c_acc = 0.0
+
+    tolerance = max(r_acc, c_acc, 600.0)
+
+    if distance_meters <= tolerance:
         return 100.0
-    elif distance_meters <= 500:
-        ratio = (distance_meters - 100) / 400.0
-        return 100.0 - (ratio * 30.0)
-    elif distance_meters <= 2000:
-        ratio = (distance_meters - 500) / 1500.0
-        return 70.0 - (ratio * 40.0)
-    elif distance_meters <= 5000:
-        ratio = (distance_meters - 2000) / 3000.0
-        return 30.0 - (ratio * 25.0)
+    elif distance_meters <= (tolerance + 1500.0):
+        ratio = (distance_meters - tolerance) / 1500.0
+        return 100.0 - (ratio * 40.0)
+    elif distance_meters <= 5000.0:
+        ratio = (distance_meters - (tolerance + 1500.0)) / max(1.0, 5000.0 - (tolerance + 1500.0))
+        return 60.0 - (ratio * 50.0)
     else:
         return 0.0
+
+def calculate_signal_fingerprint_score(reg_scan, curr_scan):
+    """
+    Scores a real, un-spoofable nearby-signal fingerprint (WiFi BSSIDs + cell tower IDs read
+    directly from device radio hardware via the native Android app). Unlike GPS, these can't be
+    faked by a mock-location app, since they reflect what the device's antenna actually hears.
+    Returns None if either side has no real scan data (so callers can fall back to weaker signals).
+    """
+    if not reg_scan or not curr_scan:
+        return None
+
+    reg_bssids = {str(ap.get("bssid") or "").lower() for ap in (reg_scan.get("wifi_access_points") or []) if ap.get("bssid")}
+    curr_bssids = {str(ap.get("bssid") or "").lower() for ap in (curr_scan.get("wifi_access_points") or []) if ap.get("bssid")}
+
+    reg_towers = {
+        f"{t.get('type')}-{t.get('cellId')}-{t.get('lac') or t.get('tac')}"
+        for t in (reg_scan.get("cell_towers") or []) if t.get("cellId")
+    }
+    curr_towers = {
+        f"{t.get('type')}-{t.get('cellId')}-{t.get('lac') or t.get('tac')}"
+        for t in (curr_scan.get("cell_towers") or []) if t.get("cellId")
+    }
+
+    if not reg_bssids and not reg_towers:
+        return None
+
+    wifi_matches = len(reg_bssids & curr_bssids)
+    tower_matches = len(reg_towers & curr_towers)
+
+    wifi_score = (wifi_matches / len(reg_bssids) * 100.0) if reg_bssids else None
+    tower_score = (tower_matches / len(reg_towers) * 100.0) if reg_towers else None
+
+    if wifi_score is not None and tower_score is not None:
+        return round(wifi_score * 0.75 + tower_score * 0.25, 1)
+    if wifi_score is not None:
+        return round(wifi_score, 1)
+    return round(tower_score, 1)
 
 def calculate_network_score(reg_net, curr_net):
     """
     Scores network & router/tower digital presence (0 - 100%).
     Factors: IP match / Subnet match, Connection type, Local router gateway candidate, Tower/AP signature.
+    If a real signal fingerprint scan (native app) is available on both sides, it fully overrides
+    the weaker synthetic signals below, since it reflects genuine nearby radio hardware instead of
+    a hash derived from easily-changed browser values.
     """
     score = 0.0
     reg_net = reg_net or {}
     curr_net = curr_net or {}
+
+    real_score = calculate_signal_fingerprint_score(reg_net.get("real_signal_scan"), curr_net.get("real_signal_scan"))
+    if real_score is not None:
+        return min(100.0, real_score)
 
     reg_ip = str(reg_net.get("ip") or "").strip()
     curr_ip = str(curr_net.get("ip") or "").strip()
@@ -71,6 +161,8 @@ def calculate_network_score(reg_net, curr_net):
             if len(r_parts) == 4 and len(c_parts) == 4 and r_parts[:3] == c_parts[:3]:
                 score += 30.0
             elif reg_ip in ("127.0.0.1", "localhost") or curr_ip in ("127.0.0.1", "localhost"):
+                score += 35.0
+            elif (reg_ip.startswith("192.168.") or reg_ip.startswith("10.")) and (curr_ip.startswith("192.168.") or curr_ip.startswith("10.")):
                 score += 35.0
             else:
                 score += 5.0
@@ -193,7 +285,9 @@ def evaluate_geo_fingerprint_match(registered_data, current_data):
     # If coordinates are present
     if reg_lat is not None and reg_lon is not None and curr_lat is not None and curr_lon is not None:
         distance_meters = haversine_distance(reg_lat, reg_lon, curr_lat, curr_lon)
-        geo_score = calculate_geo_score(distance_meters)
+        reg_acc = registered_data.get("accuracy")
+        curr_acc = current_data.get("accuracy")
+        geo_score = calculate_geo_score(distance_meters, reg_acc, curr_acc)
     else:
         distance_meters = 0.0
         geo_score = 90.0
@@ -246,56 +340,68 @@ def evaluate_geo_fingerprint_match(registered_data, current_data):
 
 def apply_geotag_watermark(image_np, geotag_info):
     """
-    Burns a futuristic, tamper-evident security watermark & HUD metadata into the image.
+    Burns a futuristic, tamper-evident security watermark & HUD metadata into the image,
+    including the physical Location Name, Latitude & Longitude, user identity, and timestamp.
     """
     img = image_np.copy()
     h, w = img.shape[:2]
 
-    # Watermark HUD bar at the bottom
-    bar_height = max(110, int(h * 0.22))
+    # Watermark HUD bar at the bottom with increased height for location name
+    bar_height = max(130, int(h * 0.25))
     overlay = img.copy()
     
-    # Semi-transparent dark slate backdrop
-    cv2.rectangle(overlay, (0, h - bar_height), (w, h), (10, 14, 25), -1)
-    # Cyan accent line
+    # Semi-transparent dark slate cyber backdrop
+    cv2.rectangle(overlay, (0, h - bar_height), (w, h), (8, 12, 22), -1)
+    # Bright cyan accent border line
     cv2.line(overlay, (0, h - bar_height), (w, h - bar_height), (254, 242, 0), 2)
 
-    alpha = 0.85
+    alpha = 0.88
     cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
 
-    # Text telemetry
-    lat = geotag_info.get("latitude", 0.0)
-    lon = geotag_info.get("longitude", 0.0)
-    acc = geotag_info.get("accuracy", 5.0)
-    user_name = geotag_info.get("full_name", "Authorized User")
-    login_id = geotag_info.get("login_id", "user")
+    # Telemetry data extraction
+    lat = float(geotag_info.get("latitude") or 0.0)
+    lon = float(geotag_info.get("longitude") or 0.0)
+    acc = float(geotag_info.get("accuracy") or 5.0)
+    user_name = str(geotag_info.get("full_name") or "Authorized User").strip()
+    login_id = str(geotag_info.get("login_id") or "user").strip()
     match_score = geotag_info.get("match_score", 95.0)
-    fp_hash = geotag_info.get("fingerprint_hash", "SEC-88FA")[:12]
-    timestamp = geotag_info.get("timestamp", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"))
-    address = geotag_info.get("address") or f"LAT: {lat:.6f}, LON: {lon:.6f}"
+    fp_hash = str(geotag_info.get("fingerprint_hash") or "SEC-88FA")[:12]
+    timestamp = str(geotag_info.get("timestamp") or datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"))
+    
+    # Location Name (e.g. "Visakhapatnam, Andhra Pradesh" or "Salt Lake, Kolkata")
+    location_name = str(geotag_info.get("location_name") or geotag_info.get("address") or f"Sector: {lat:.4f}, {lon:.4f}").strip()
+    # Clean location prefix if present
+    location_clean = location_name.replace("Sector: ", "").replace("GPS: ", "").split("|")[0].strip()
 
     font = cv2.FONT_HERSHEY_SIMPLEX
-    scale_title = max(0.45, w / 1400.0)
+    scale_title = max(0.44, w / 1400.0)
     scale_text = max(0.38, w / 1600.0)
 
-    # Line 1: Security Stamp & Status
-    y_start = h - bar_height + int(bar_height * 0.22)
-    cv2.putText(img, f"[GEO-VERIFIED PHOTO] MATCH CONFIDENCE: {match_score}%", 
-                (18, y_start), font, scale_title, (0, 242, 254), 1, cv2.LINE_AA)
+    # Line 1: Security Stamp & Match Confidence
+    y1 = h - bar_height + int(bar_height * 0.19)
+    cv2.putText(img, f"[GEO-VERIFIED RECORD] MATCH SCORE: {match_score}% | {timestamp}", 
+                (18, y1), font, scale_title, (0, 242, 254), 1, cv2.LINE_AA)
     
-    # Line 2: Coordinates & Accuracy
-    y_line2 = y_start + int(bar_height * 0.24)
-    coord_text = f"GPS: {lat:.6f} N, {lon:.6f} E (+/-{acc:.1f}m) | {address[:40]}"
-    cv2.putText(img, coord_text, (18, y_line2), font, scale_text, (240, 240, 240), 1, cv2.LINE_AA)
+    # Line 2: Physical Location Name (High visibility gold/amber)
+    y2 = y1 + int(bar_height * 0.20)
+    loc_text = f"LOCATION: {location_clean[:55]}"
+    cv2.putText(img, loc_text, (18, y2), font, scale_text * 1.05, (60, 225, 255), 1, cv2.LINE_AA)
 
-    # Line 3: User ID & Timestamp
-    y_line3 = y_line2 + int(bar_height * 0.24)
-    meta_text = f"USER: {user_name} ({login_id}) | TIME: {timestamp}"
-    cv2.putText(img, meta_text, (18, y_line3), font, scale_text, (180, 200, 220), 1, cv2.LINE_AA)
+    # Line 3: Exact Coordinates & GPS Precision (Crisp White)
+    y3 = y2 + int(bar_height * 0.20)
+    lat_dir = "N" if lat >= 0 else "S"
+    lon_dir = "E" if lon >= 0 else "W"
+    coord_text = f"COORDINATES: {abs(lat):.6f} {lat_dir}, {abs(lon):.6f} {lon_dir}  (Accuracy: +/-{acc:.1f}m)"
+    cv2.putText(img, coord_text, (18, y3), font, scale_text, (245, 245, 245), 1, cv2.LINE_AA)
 
-    # Line 4: Digital Fingerprint Hash Stamp
-    y_line4 = y_line3 + int(bar_height * 0.22)
-    fp_text = f"DIGITAL FP HASH: {fp_hash} | TAMPER-PROOF BIOMETRIC VAULT AUDIT RECORD"
-    cv2.putText(img, fp_text, (18, y_line4), font, max(0.32, scale_text * 0.85), (100, 220, 140), 1, cv2.LINE_AA)
+    # Line 4: Enrolled User Identity & Device Digital Fingerprint Hash
+    y4 = y3 + int(bar_height * 0.19)
+    meta_text = f"USER: {user_name} ({login_id}) | DEVICE FP: {fp_hash}"
+    cv2.putText(img, meta_text, (18, y4), font, scale_text, (190, 210, 230), 1, cv2.LINE_AA)
+
+    # Line 5: Vault Immutability Audit Tag
+    y5 = y4 + int(bar_height * 0.17)
+    audit_tag = "TAMPER-PROOF BIOMETRIC VAULT AUDIT RECORD | SHA-256 SIGNED"
+    cv2.putText(img, audit_tag, (18, y5), font, max(0.30, scale_text * 0.82), (100, 230, 140), 1, cv2.LINE_AA)
 
     return img

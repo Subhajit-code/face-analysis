@@ -348,10 +348,13 @@
                     </div>
 
                     <!-- Main Trigger Bar -->
-                    <div class="geotag-trigger-bar">
+                    <div class="geotag-trigger-bar" style="display: flex; gap: 10px; flex-wrap: wrap;">
                         <button type="button" class="cyber-btn primary-btn" id="btnOpenGeotagCamera" onclick="handleOpenGeotagCamera()">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
                             <span>Open Camera for Geo-Tag Capture</span>
+                        </button>
+                        <button type="button" class="cyber-btn secondary-btn" id="btnCalibrateLocation" onclick="openLocationCalibrator()" style="background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.35); color: #38bdf8;">
+                            <span>📍 Calibrate Location</span>
                         </button>
                         <button type="button" class="cyber-btn secondary-btn hidden" id="btnCloseGeotagCamera" onclick="closeGeotagCamera()">
                             <span>Close Camera</span>
@@ -389,7 +392,10 @@
                             <div class="live-watermark-overlay" id="liveWatermarkOverlay">
                                 <div class="watermark-line line-main">
                                     <span class="badge-tag">GEO-TAGGED SENSOR</span>
-                                    <span id="wmLiveCoords">LAT: --.----, LON: --.----</span>
+                                    <span id="wmLiveLocName" style="color: #38bdf8; font-weight: 600;">📍 Locating Sector...</span>
+                                </div>
+                                <div class="watermark-line line-coords">
+                                    <span id="wmLiveCoords">COORDS: LAT --.----°, LON --.----°</span>
                                 </div>
                                 <div class="watermark-line line-sub">
                                     <span id="wmLiveUser">USER: Authenticated</span>
@@ -521,6 +527,39 @@
                 <span>Proceed to Dashboard</span>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
             </button>
+        </div>
+    </div>
+
+    <!-- Location Calibration / Override Modal -->
+    <div class="modal-backdrop hidden" id="locationCalibrateModal">
+        <div class="mobile-modal-card" style="max-width: 520px; border-color: rgba(56, 189, 248, 0.4);">
+            <button class="modal-close-btn" onclick="closeLocationCalibrator()">&times;</button>
+            <div class="mobile-modal-header">
+                <div class="mobile-icon-badge">📍</div>
+                <h3 class="mobile-modal-title">Location Intelligence &amp; Calibration</h3>
+                <p class="mobile-modal-sub">If your laptop Wi-Fi reports an inaccurate city (e.g. Visakhapatnam due to recycled ISP router BSSID), calibrate to your actual city here.</p>
+            </div>
+            
+            <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 14px; margin: 15px 0;">
+                <div style="font-weight: 600; color: #38bdf8; font-size: 0.9rem; margin-bottom: 4px;">📡 Verified ISP Connection:</div>
+                <div style="font-size: 0.88rem; color: #e2e8f0;">Durgapur, West Bengal (Bharti Airtel Limited)</div>
+                <div style="font-size: 0.78rem; color: #64748b; margin-top: 3px;">Coordinates: 23.5158° N, 87.3080° E</div>
+                <button type="button" class="cyber-btn primary-btn" onclick="applyCalibratedLocation('Durgapur, West Bengal, India', 23.5158, 87.3080)" style="margin-top: 12px; width: 100%; justify-content: center; padding: 9px 12px; font-size: 0.85rem;">
+                    <span>🎯 Calibrate to Durgapur, West Bengal</span>
+                </button>
+            </div>
+
+            <div style="margin-top: 12px;">
+                <label style="font-size: 0.8rem; color: #cbd5e1; display: block; margin-bottom: 6px;">Or Enter Custom City / Area in West Bengal:</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="customCityInput" placeholder="e.g. City Centre, Durgapur, West Bengal" style="flex: 1; background: #0f172a; border: 1px solid #334155; color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 0.85rem;">
+                    <button type="button" class="cyber-btn secondary-btn" onclick="applyCustomLocationInput()" style="white-space: nowrap; font-size: 0.85rem; padding: 8px 12px;">Save</button>
+                </div>
+            </div>
+
+            <div class="mobile-modal-footer" style="margin-top: 20px;">
+                <button type="button" class="cyber-btn secondary-btn" onclick="closeLocationCalibrator()">Close</button>
+            </div>
         </div>
     </div>
 
